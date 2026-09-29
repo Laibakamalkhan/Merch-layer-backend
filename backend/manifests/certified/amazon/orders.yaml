@@ -1,0 +1,12 @@
+protocol: rest
+method: GET
+path: /orders/v0/orders
+response:
+  format: json
+  records_path: payload.Orders
+pagination:
+  type: next_token
+  records_path: payload.Orders
+  token_param: NextToken
+  next_token_path: payload.NextToken
+  token_location: query

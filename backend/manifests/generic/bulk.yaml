@@ -1,0 +1,22 @@
+manifest_version: "1"
+id: generic-bulk
+name: Generic Bulk HTTP API
+platform: custom
+protocol: bulk
+base_url: ""
+connection_fields:
+  - key: base_url
+    label: API Base URL
+    type: url
+    target: base_url
+auth:
+  type: none
+resources:
+  submit:
+    protocol: bulk
+    method: POST
+    path: /export
+    response:
+      format: json
+    pagination:
+      type: none

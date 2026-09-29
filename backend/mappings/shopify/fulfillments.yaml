@@ -1,0 +1,15 @@
+table: silver.fulfillments
+explode: fulfillments
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: id
+  status: status
+  source_created_at: createdAt
+  source_updated_at: updatedAt
+  shipped_at: createdAt
+  source_hash: $context.record_hash
+foreign_keys:
+  order_id:
+    table: silver.orders
+    source_path: $parent.id

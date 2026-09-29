@@ -1,0 +1,53 @@
+manifest_version: "1"
+id: shopify-admin-graphql
+name: Shopify Admin GraphQL
+platform: shopify
+protocol: graphql
+base_url: ""
+
+connection_fields:
+  - key: store_url
+    label: Shopify store URL
+    type: url
+    target: base_url
+    placeholder: https://store.myshopify.com
+  # Naya tareeqa (2026+): Shopify Dev Dashboard app -> Settings mein Client ID aur Client Secret
+  - key: client_id
+    label: Client ID (Shopify Dev Dashboard)
+    type: text
+    target: auth.client_id
+    required: false
+    placeholder: Dev Dashboard > App > Settings > Client ID
+  - key: client_secret
+    label: Client Secret (Shopify Dev Dashboard)
+    type: secret
+    target: auth.client_secret
+    required: false
+  # Purana tareeqa: sirf un apps ke liye jo 1 Jan 2026 se pehle admin mein bani thin (shpat_...)
+  - key: access_token
+    label: Ya purana Admin API access token (shpat_...) - optional
+    type: secret
+    target: auth.token
+    required: false
+
+auth:
+  type: shopify_token
+  token_header: X-Shopify-Access-Token
+  token: ""
+  client_id: ""
+  client_secret: ""
+
+default_headers:
+  Accept: application/json
+
+resources:
+  - orders
+  - products
+  - customers
+  - inventory
+  - fulfillments
+  - refunds
+
+discovery:
+  graphql_introspection: true
+  graphql_path: /admin/api/2026-07/graphql.json

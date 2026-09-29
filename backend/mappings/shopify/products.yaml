@@ -1,0 +1,36 @@
+table: silver.products
+conflict_columns: [connection_id, source_id]
+required: [source_id, title]
+fields:
+  source_id: id
+  title: title
+  handle: handle
+  product_type: productType
+  vendor: vendor
+  status: status
+  description: description
+  tags: tags
+  published_at: publishedAt
+  source_created_at: createdAt
+  source_updated_at: updatedAt
+  source_hash: $context.record_hash
+children:
+  - table: silver.product_variants
+    explode: variants.nodes
+    conflict_columns: [connection_id, source_id]
+    required: [source_id, product_id]
+    fields:
+      source_id: id
+      sku: sku
+      barcode: barcode
+      title: title
+      price: price
+      compare_at_price: compareAtPrice
+      currency_code: $parent.currencyCode
+      source_created_at: createdAt
+      source_updated_at: updatedAt
+      source_hash: $context.record_hash
+    foreign_keys:
+      product_id:
+        table: silver.products
+        source_path: $parent.id

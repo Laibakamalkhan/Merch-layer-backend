@@ -1,0 +1,43 @@
+protocol: graphql
+method: POST
+path: /admin/api/2026-07/graphql.json
+graphql_query: |
+  query Products($cursor: String) {
+    products(first: 100, after: $cursor) {
+      nodes {
+        id
+        title
+        handle
+        status
+        vendor
+        productType
+        description
+        tags
+        publishedAt
+        createdAt
+        updatedAt
+        variants(first: 100) {
+          nodes {
+            id
+            title
+            sku
+            barcode
+            price
+            compareAtPrice
+            createdAt
+            updatedAt
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+response:
+  format: json
+  records_path: data.products.nodes
+pagination:
+  type: graphql_cursor
+  records_path: data.products.nodes
+  cursor_variable: cursor
+  cursor_path: data.products.pageInfo.endCursor
+  has_next_path: data.products.pageInfo.hasNextPage

@@ -1,0 +1,29 @@
+protocol: graphql
+method: POST
+path: /admin/api/2026-07/graphql.json
+graphql_query: |
+  query OrdersForRefunds($cursor: String) {
+    orders(first: 100, after: $cursor) {
+      nodes {
+        id
+        name
+        refunds {
+          id
+          createdAt
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+response:
+  format: json
+  records_path: data.orders.nodes
+pagination:
+  type: graphql_cursor
+  records_path: data.orders.nodes
+  cursor_variable: cursor
+  cursor_path: data.orders.pageInfo.endCursor
+  has_next_path: data.orders.pageInfo.hasNextPage

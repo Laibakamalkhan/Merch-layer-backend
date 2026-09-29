@@ -1,0 +1,2 @@
+from .openapi import discover_openapi
+discover_swagger=discover_openapi

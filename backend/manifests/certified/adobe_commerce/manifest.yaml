@@ -1,0 +1,23 @@
+manifest_version: "1"
+id: adobe-commerce-rest
+name: Adobe Commerce REST
+platform: adobe_commerce
+protocol: rest
+base_url: ""
+
+connection_fields:
+  - key: store_url
+    label: Adobe Commerce URL
+    type: url
+    target: base_url
+  - key: access_token
+    label: Integration/Admin Access Token
+    type: secret
+    target: auth.token
+
+auth:
+  type: bearer
+  token: ""
+
+resources:
+  - products

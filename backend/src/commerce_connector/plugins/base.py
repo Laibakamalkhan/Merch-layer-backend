@@ -1,0 +1,2 @@
+class ConnectorPlugin:
+    name='unnamed'

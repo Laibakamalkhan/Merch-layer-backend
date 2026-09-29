@@ -1,0 +1,22 @@
+manifest_version: "1"
+id: generic-file-feed
+name: Generic Remote File Feed
+platform: custom
+protocol: file
+base_url: ""
+connection_fields:
+  - key: base_url
+    label: Feed Base URL
+    type: url
+    target: base_url
+auth:
+  type: none
+resources:
+  feed:
+    protocol: file
+    method: GET
+    path: /
+    response:
+      format: auto
+    pagination:
+      type: none

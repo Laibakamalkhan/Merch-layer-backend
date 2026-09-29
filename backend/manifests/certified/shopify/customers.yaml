@@ -1,0 +1,31 @@
+protocol: graphql
+method: POST
+path: /admin/api/2026-07/graphql.json
+graphql_query: |
+  query Customers($cursor: String) {
+    customers(first: 100, after: $cursor) {
+      nodes {
+        id
+        displayName
+        firstName
+        lastName
+        email
+        phone
+        createdAt
+        updatedAt
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+response:
+  format: json
+  records_path: data.customers.nodes
+pagination:
+  type: graphql_cursor
+  records_path: data.customers.nodes
+  cursor_variable: cursor
+  cursor_path: data.customers.pageInfo.endCursor
+  has_next_path: data.customers.pageInfo.hasNextPage

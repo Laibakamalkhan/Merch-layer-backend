@@ -1,0 +1,44 @@
+.problem-solution {
+  background: var(--color-white);
+  padding: var(--space-20) 0;
+}
+
+.problem-solution__top {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-16);
+  margin-bottom: var(--space-14);
+  align-items: start;
+}
+
+.problem-solution__heading {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: #0F172A;
+  margin-bottom: var(--space-4);
+}
+
+.problem-solution__body {
+  font-size: var(--text-base);
+  color: var(--color-gray-500);
+  line-height: 1.75;
+}
+
+.highlight-blue {
+  color: var(--color-brand);
+}
+
+.problem-solution__diagram {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .problem-solution__top {
+    grid-template-columns: 1fr;
+    gap: var(--space-10);
+    margin-bottom: var(--space-10);
+  }
+}
+

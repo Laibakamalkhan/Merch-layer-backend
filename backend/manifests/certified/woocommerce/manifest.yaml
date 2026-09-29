@@ -1,0 +1,31 @@
+manifest_version: "1"
+id: woocommerce-rest-v3
+name: WooCommerce REST API v3
+platform: woocommerce
+protocol: rest
+base_url: ""
+
+connection_fields:
+  - key: store_url
+    label: WooCommerce store URL
+    type: url
+    target: base_url
+    placeholder: https://store.example.com
+  - key: consumer_key
+    label: Consumer Key
+    type: secret
+    target: auth.username
+  - key: consumer_secret
+    label: Consumer Secret
+    type: secret
+    target: auth.password
+
+auth:
+  type: basic
+  username: ""
+  password: ""
+
+resources:
+  - orders
+  - products
+  - customers

@@ -1,0 +1,35 @@
+manifest_version: "1"
+id: generic-graphql
+name: Generic GraphQL API
+platform: custom
+protocol: graphql
+base_url: ""
+connection_fields:
+  - key: base_url
+    label: GraphQL Base URL
+    type: url
+    target: base_url
+  - key: token
+    label: Bearer token
+    type: secret
+    target: auth.token
+    required: false
+auth:
+  type: bearer
+  token: ""
+resources:
+  schema_probe:
+    protocol: graphql
+    method: POST
+    path: /graphql
+    graphql_query: |
+      query {
+        __typename
+      }
+    response:
+      format: json
+    pagination:
+      type: none
+discovery:
+  graphql_introspection: true
+  graphql_path: /graphql

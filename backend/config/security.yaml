@@ -1,0 +1,5 @@
+security:
+  allow_private_networks: false
+  allow_http: false
+  max_response_bytes: 104857600
+  dynamic_plugins: false

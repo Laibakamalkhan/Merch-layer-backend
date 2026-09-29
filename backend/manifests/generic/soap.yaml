@@ -1,0 +1,25 @@
+manifest_version: "1"
+id: generic-soap
+name: Generic SOAP API
+platform: custom
+protocol: soap
+base_url: ""
+connection_fields:
+  - key: base_url
+    label: SOAP Base URL
+    type: url
+    target: base_url
+auth:
+  type: none
+resources:
+  sample:
+    protocol: soap
+    method: POST
+    path: /
+    xml_body: |
+      <?xml version="1.0" encoding="utf-8"?>
+      <Envelope></Envelope>
+    response:
+      format: xml
+    pagination:
+      type: none

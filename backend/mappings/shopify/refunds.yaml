@@ -1,0 +1,17 @@
+table: silver.refunds
+explode: refunds
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: id
+  source_created_at: createdAt
+  source_updated_at: updatedAt
+  amount: totalRefundedSet.shopMoney.amount
+  currency_code: totalRefundedSet.shopMoney.currencyCode
+  source_hash: $context.record_hash
+defaults:
+  amount: 0
+foreign_keys:
+  order_id:
+    table: silver.orders
+    source_path: $parent.id

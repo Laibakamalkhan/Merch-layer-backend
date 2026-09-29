@@ -1,0 +1,12 @@
+protocol: rest
+method: GET
+path: /rest/V1/products
+response:
+  format: json
+  records_path: items
+pagination:
+  type: page
+  records_path: items
+  page_param: searchCriteria[currentPage]
+  page_size_param: searchCriteria[pageSize]
+  page_size: 100

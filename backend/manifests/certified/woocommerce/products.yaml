@@ -1,0 +1,10 @@
+protocol: rest
+method: GET
+path: /wp-json/wc/v3/products
+params:
+  per_page: 100
+response:
+  format: json
+pagination:
+  type: link_header
+  link_rel: next

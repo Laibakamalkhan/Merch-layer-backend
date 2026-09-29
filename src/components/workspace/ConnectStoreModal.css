@@ -1,0 +1,10 @@
+.csm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 1000; padding: 16px; }
+.csm { position: relative; width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 12px; padding: 24px; background: #11151f; border: 1px solid #232a3b; border-radius: 16px; color: #e6e9f0; }
+.csm h3 { margin: 0 0 4px; }
+.csm label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #8b95ad; }
+.csm input { padding: 10px 12px; border-radius: 10px; border: 1px solid #2a3245; background: #0a0d14; color: #e6e9f0; font-size: 14px; }
+.csm-close { position: absolute; top: 12px; right: 12px; background: none; border: 0; color: #8b95ad; cursor: pointer; }
+.csm-submit { padding: 11px; border: 0; border-radius: 10px; background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer; }
+.csm-submit:disabled { opacity: .6; }
+.csm-error { color: #f87171; font-size: 13px; margin: 0; }
+.csm-step { color: #8b95ad; font-size: 13px; margin: 0; }

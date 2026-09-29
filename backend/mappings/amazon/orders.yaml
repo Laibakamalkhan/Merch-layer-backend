@@ -1,0 +1,24 @@
+table: silver.orders
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: AmazonOrderId
+  order_number: AmazonOrderId
+  status: OrderStatus
+  sales_channel: SalesChannel
+  currency_code: OrderTotal.CurrencyCode
+  gross_amount: OrderTotal.Amount
+  total_amount: OrderTotal.Amount
+  net_amount: OrderTotal.Amount
+  item_count: NumberOfItemsShipped
+  source_created_at: PurchaseDate
+  source_updated_at: LastUpdateDate
+  source_hash: $context.record_hash
+defaults:
+  gross_amount: 0
+  total_amount: 0
+  net_amount: 0
+  discount_amount: 0
+  shipping_amount: 0
+  tax_amount: 0
+  refunded_amount: 0

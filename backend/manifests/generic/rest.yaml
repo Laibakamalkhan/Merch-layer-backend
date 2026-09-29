@@ -1,0 +1,27 @@
+manifest_version: "1"
+id: generic-rest
+name: Generic REST API
+platform: custom
+protocol: rest
+base_url: ""
+connection_fields:
+  - key: base_url
+    label: API Base URL
+    type: url
+    target: base_url
+  - key: token
+    label: Bearer token
+    type: secret
+    target: auth.token
+    required: false
+auth:
+  type: bearer
+  token: ""
+resources:
+  sample:
+    method: GET
+    path: /
+    response:
+      format: auto
+    pagination:
+      type: none

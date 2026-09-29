@@ -1,0 +1,10 @@
+table: silver.products
+conflict_columns: [connection_id, source_id]
+required: [source_id, title]
+fields:
+  source_id: id
+  title: name
+  status: status
+  source_created_at: created_at
+  source_updated_at: updated_at
+  source_hash: $context.record_hash

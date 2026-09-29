@@ -1,0 +1,12 @@
+table: silver.customers
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: id
+  email: email
+  first_name: first_name
+  last_name: last_name
+  display_name: username
+  source_created_at: date_created_gmt
+  source_updated_at: date_modified_gmt
+  source_hash: $context.record_hash

@@ -1,0 +1,84 @@
+.section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--color-white);
+  border: 1px solid var(--color-gray-200);
+  border-radius: var(--radius-full);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-6);
+  user-select: none;
+}
+
+.section-label__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-brand);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
+  flex-shrink: 0;
+}
+
+.section-label__number {
+  color: var(--color-brand);
+  font-weight: 700;
+}
+
+.section-label__sep {
+  color: var(--color-brand);
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.section-label__tag {
+  color: var(--color-brand);
+  font-weight: 700;
+}
+
+.section-label__pipe {
+  color: var(--color-gray-300);
+  margin: 0 0.125rem;
+  font-weight: 300;
+}
+
+.section-label__subtitle {
+  color: var(--color-gray-500);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+/* Dark mode variant for dark sections */
+.section-label--dark {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+.section-label--dark .section-label__dot {
+  background-color: #60A5FA;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.6);
+}
+
+.section-label--dark .section-label__number,
+.section-label--dark .section-label__tag {
+  color: #93C5FD;
+}
+
+.section-label--dark .section-label__sep {
+  color: #93C5FD;
+}
+
+.section-label--dark .section-label__pipe {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.section-label--dark .section-label__subtitle {
+  color: rgba(255, 255, 255, 0.6);
+}
+

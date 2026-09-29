@@ -1,0 +1,43 @@
+manifest_version: "1"
+id: amazon-selling-partner
+name: Amazon Selling Partner API
+platform: amazon
+protocol: rest
+base_url: ""
+
+connection_fields:
+  - key: region_endpoint
+    label: Amazon SP-API region
+    type: choice
+    target: base_url
+    options:
+      North America: https://sellingpartnerapi-na.amazon.com
+      Europe: https://sellingpartnerapi-eu.amazon.com
+      Far East: https://sellingpartnerapi-fe.amazon.com
+  - key: lwa_client_id
+    label: LWA Client ID
+    type: secret
+    target: auth.lwa_client_id
+  - key: lwa_client_secret
+    label: LWA Client Secret
+    type: secret
+    target: auth.lwa_client_secret
+  - key: lwa_refresh_token
+    label: LWA Refresh Token
+    type: secret
+    target: auth.lwa_refresh_token
+  - key: marketplace_id
+    label: Marketplace ID
+    type: text
+    target: default_params.MarketplaceIds
+
+auth:
+  type: amazon_lwa
+  token_url: https://api.amazon.com/auth/o2/token
+  lwa_client_id: ""
+  lwa_client_secret: ""
+  lwa_refresh_token: ""
+  amazon_access_token_header: x-amz-access-token
+
+resources:
+  - orders

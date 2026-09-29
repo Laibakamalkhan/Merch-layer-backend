@@ -1,0 +1,15 @@
+table: silver.products
+conflict_columns: [connection_id, source_id]
+required: [source_id, title]
+fields:
+  source_id: id
+  title: name
+  handle: slug
+  product_type: type
+  status: status
+  description: description
+  tags: tags
+  published_at: date_created_gmt
+  source_created_at: date_created_gmt
+  source_updated_at: date_modified_gmt
+  source_hash: $context.record_hash

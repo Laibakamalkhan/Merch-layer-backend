@@ -1,0 +1,253 @@
+/* =========================================
+   Commerce Flow Diagram Styling
+   ========================================= */
+
+.flow-diagram-wrapper {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.flow-diagram-container {
+  background: var(--color-white);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: var(--radius-2xl);
+  box-shadow: 
+    0 10px 30px -10px rgba(15, 23, 42, 0.05),
+    0 1px 3px rgba(15, 23, 42, 0.02);
+  padding: var(--space-8) var(--space-6);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* SVG Canvas */
+.flow-diagram__svg {
+  width: 100%;
+  height: auto;
+  max-height: 380px;
+  display: block;
+  overflow: visible;
+}
+
+/* Base dashed connection paths */
+.flow-path {
+  fill: none;
+  stroke: #CBD5E1;
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  stroke-linecap: round;
+  transition: stroke 0.3s ease, stroke-width 0.3s ease;
+}
+
+.flow-path--active {
+  stroke: var(--color-brand);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+/* Animated Data Flow Dots */
+.flow-dot {
+  fill: var(--color-brand);
+  opacity: 0.95;
+  will-change: transform, opacity;
+}
+
+/* HTML Foreign Object containers in SVG */
+.flow-node-foreign {
+  overflow: visible;
+}
+
+/* Source & Destination Nodes */
+.flow-node {
+  background: var(--color-white);
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  font-family: var(--font-family);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--color-gray-800);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  cursor: default;
+  user-select: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.flow-node:hover,
+.flow-node--hover {
+  border-color: var(--color-brand-light);
+  color: var(--color-brand-dark);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+/* Central Processing Card (Unified Commerce Layer) */
+.flow-center-card {
+  background: var(--color-brand);
+  border-radius: 12px;
+  height: 72px;
+  width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  color: var(--color-white);
+  box-shadow: 
+    0 8px 24px rgba(37, 99, 235, 0.3),
+    0 2px 6px rgba(37, 99, 235, 0.2);
+  position: relative;
+  cursor: default;
+  user-select: none;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  text-align: center;
+}
+
+.flow-center-card:hover,
+.flow-center-card--hover {
+  transform: scale(1.02);
+  box-shadow: 
+    0 12px 28px rgba(37, 99, 235, 0.38),
+    0 4px 10px rgba(37, 99, 235, 0.25);
+}
+
+.flow-center-card__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.25;
+}
+
+.flow-center-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.flow-center-card__sub {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.95;
+  letter-spacing: -0.01em;
+}
+
+/* Dashed edge indicators matching the screenshot */
+.flow-center-card__edge {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-left: 2px dashed rgba(255, 255, 255, 0.6);
+}
+
+.flow-center-card__edge--left {
+  left: 2px;
+}
+
+.flow-center-card__edge--right {
+  right: 2px;
+  border-left: none;
+  border-right: 2px dashed rgba(255, 255, 255, 0.6);
+}
+
+/* Mobile View Fallback */
+.flow-diagram-mobile {
+  display: none;
+}
+
+/* =========================================
+   Responsive Breakpoints
+   ========================================= */
+
+@media (max-width: 640px) {
+  .flow-diagram__svg {
+    display: none;
+  }
+
+  .flow-diagram-mobile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+    width: 100%;
+    padding: var(--space-4) 0;
+  }
+
+  .flow-mobile-group {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .flow-mobile-label {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-gray-400);
+    font-weight: 600;
+  }
+
+  .flow-mobile-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    justify-content: center;
+  }
+
+  .flow-mobile-pills .flow-node {
+    height: 36px;
+    font-size: 12.5px;
+    padding: 0 12px;
+  }
+
+  .flow-mobile-connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 36px;
+    position: relative;
+    width: 100%;
+  }
+
+  .flow-mobile-line {
+    width: 2px;
+    height: 100%;
+    border-left: 1.5px dashed var(--color-gray-300);
+  }
+
+  .flow-mobile-dot {
+    position: absolute;
+    top: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-brand);
+    animation: mobileDotMove 1.8s infinite ease-in-out;
+  }
+
+  @keyframes mobileDotMove {
+    0% { top: 0; opacity: 0; }
+    20% { opacity: 1; }
+    80% { opacity: 1; }
+    100% { top: 30px; opacity: 0; }
+  }
+
+  .flow-center-card--mobile {
+    width: auto;
+    min-width: 180px;
+    height: auto;
+    padding: 12px 20px;
+  }
+}

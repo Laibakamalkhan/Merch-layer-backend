@@ -1,0 +1,113 @@
+.faq {
+  background: var(--color-gray-50);
+  border-top: 1px solid var(--color-gray-200);
+}
+
+.faq__inner {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: var(--space-16);
+  align-items: start;
+}
+
+.faq__headline {
+  font-size: clamp(1.75rem, 3.5vw, 2.5rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.18;
+  color: #0F172A;
+  margin-bottom: var(--space-4);
+}
+
+.faq__note {
+  font-size: var(--text-base);
+  color: var(--color-gray-500);
+  line-height: 1.6;
+}
+
+.faq__link {
+  color: var(--color-brand);
+  transition: color var(--transition-fast);
+}
+
+.faq__link:hover {
+  color: var(--color-brand-dark);
+}
+
+/* Accordion */
+.faq__accordion {
+  display: flex;
+  flex-direction: column;
+}
+
+.faq-item {
+  border-top: 1px solid var(--color-gray-200);
+}
+
+.faq-item:last-child {
+  border-bottom: 1px solid var(--color-gray-200);
+}
+
+.faq-item__question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5) 0;
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--color-gray-800);
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+  font-family: inherit;
+}
+
+.faq-item__question:hover {
+  color: var(--color-gray-900);
+}
+
+.faq-item__icon {
+  flex-shrink: 0;
+  color: var(--color-gray-400);
+  transition: color var(--transition-fast);
+  display: flex;
+  align-items: center;
+}
+
+.faq-item--open .faq-item__question {
+  color: var(--color-gray-900);
+}
+
+.faq-item--open .faq-item__icon {
+  color: var(--color-brand);
+}
+
+.faq-item__answer-wrapper {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
+  opacity: 0;
+}
+
+.faq-item--open .faq-item__answer-wrapper {
+  max-height: 300px;
+  opacity: 1;
+}
+
+.faq-item__answer {
+  padding-bottom: var(--space-5);
+  font-size: var(--text-base);
+  color: var(--color-gray-500);
+  line-height: 1.75;
+}
+
+@media (max-width: 800px) {
+  .faq__inner {
+    grid-template-columns: 1fr;
+    gap: var(--space-8);
+  }
+}

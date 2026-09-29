@@ -1,0 +1,3 @@
+concurrency:
+  max_connections: 5
+  resources_per_connection: 1
