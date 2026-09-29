@@ -24,20 +24,19 @@ def main() -> int:
 
     from commerce_connector.api.deps import get_api_settings
     from commerce_connector.platform.db import PostgresGateway
-    from commerce_connector.platform.gemini import GeminiClient
+    from commerce_connector.platform.groq import GroqClient
     from commerce_connector.platform.rag import SemanticIndexer
 
     cfg = get_api_settings()
     if not cfg.database_url:
         raise RuntimeError("DATABASE_URL is not configured.")
-    if not cfg.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured. It is still required for AI text generation.")
+    if not cfg.groq_api_key:
+        raise RuntimeError("GROQ_API_KEY is not configured. It is still required for AI text generation.")
 
     db = PostgresGateway(cfg.database_url)
-    client = GeminiClient(
-        cfg.gemini_api_key,
-        model=cfg.gemini_model,
-        embedding_model=cfg.gemini_embedding_model,
+    client = GroqClient(
+        cfg.groq_api_key,
+        model=cfg.groq_model,
         embedding_dimensions=cfg.embedding_dimensions,
         embedding_provider=cfg.embedding_provider,
         ollama_base_url=cfg.ollama_base_url,

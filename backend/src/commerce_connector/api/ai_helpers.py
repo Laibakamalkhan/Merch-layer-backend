@@ -21,6 +21,7 @@ import psycopg
 from fastapi import HTTPException
 
 from commerce_connector.api.deps import get_api_settings
+from commerce_connector.platform.groq import GroqAPIError, GroqTransportError
 
 
 logger = logging.getLogger("commerce_connector.api")
@@ -29,7 +30,7 @@ logger = logging.getLogger("commerce_connector.api")
 def map_ai_exception(exc: Exception) -> HTTPException:
     """Turn any failure inside the AI flow into a clean HTTP error.
 
-    Before this, only ValueError/RuntimeError were mapped; a Gemini network
+    Before this, only ValueError/RuntimeError were mapped; a Groq network
     error (httpx) or a database error (psycopg) escaped as a bare
     "500 Internal Server Error" with no message for the frontend.
     """
@@ -37,10 +38,21 @@ def map_ai_exception(exc: Exception) -> HTTPException:
         return exc
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, GroqTransportError):
+        return HTTPException(
+            status_code=502,
+            detail=f"Could not establish a reliable HTTPS connection to Groq. {exc}",
+        )
+    if isinstance(exc, GroqAPIError):
+        status = exc.status_code if 400 <= exc.status_code < 600 else 502
+        return HTTPException(
+            status_code=status,
+            detail=f"Groq API returned HTTP {exc.status_code}. {exc.body[:1200]}",
+        )
     if isinstance(exc, httpx.TimeoutException):
-        return HTTPException(status_code=504, detail="The AI provider (Gemini) timed out. Please try again.")
+        return HTTPException(status_code=504, detail="The AI provider (Groq) timed out. Please try again.")
     if isinstance(exc, httpx.HTTPError):
-        return HTTPException(status_code=502, detail="Could not reach the AI provider (Gemini). Check internet/API key and try again.")
+        return HTTPException(status_code=502, detail="Could not reach the AI provider (Groq). Check internet/API key and try again.")
     if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
         return HTTPException(status_code=503, detail="Database connection problem. Please try again.")
     if isinstance(exc, psycopg.Error):
@@ -106,7 +118,7 @@ async def ai_event_stream(
 ) -> AsyncIterator[bytes]:
     """Server-Sent Events: started -> status -> result -> done (or error -> done).
 
-    The Gemini planner returns structured JSON, so partial tokens are not
+    The Groq planner returns structured JSON, so partial tokens are not
     streamed; the validated final result is sent as one ``result`` event.
     """
     yield sse_event("started", {"conversation_id": str(conversation_id) if conversation_id else None})

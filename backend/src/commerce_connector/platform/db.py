@@ -600,7 +600,14 @@ class PostgresGateway:
         # SQLGuard converts :tenant_id into %(tenant_id)s.
         with self.connection() as conn, conn.cursor() as cur:
             cur.execute("set transaction read only")
-            cur.execute("set local statement_timeout = %s", (timeout_ms,))
+            # PostgreSQL does not allow bind parameters in SET LOCAL utility
+            # statements. set_config(..., true) applies the value locally to
+            # the current transaction while still keeping the timeout value
+            # parameterized (and therefore safe from SQL injection).
+            cur.execute(
+                "select set_config('statement_timeout', %s, true)",
+                (f"{int(timeout_ms)}ms",),
+            )
             cur.execute(sql, {"tenant_id": str(tenant_id)})
             return list(cur.fetchall())
 
@@ -638,7 +645,15 @@ class PostgresGateway:
             """
             update ai.query_runs
             set status=%s::app.ai_query_status,
-                route=coalesce(%s::app.ai_route, route),
+                route=coalesce(
+                    (
+                        select e.enumlabel::app.ai_route
+                        from pg_catalog.pg_enum e
+                        where e.enumtypid = 'app.ai_route'::regtype
+                          and e.enumlabel = %s
+                    ),
+                    route
+                ),
                 intent=coalesce(%s::jsonb,intent),
                 selected_context=coalesce(%s::jsonb,selected_context),
                 error_message=%s,
@@ -849,13 +864,23 @@ class PostgresGateway:
             from ai.document_chunks c
             join ai.documents d on d.id=c.document_id
             where c.embedding is not null
-              and (c.tenant_id is null or c.tenant_id=%s)
+              and c.tenant_id=%s
+              and d.tenant_id=%s
               and d.source_type in ('schema','metric','connection')
               and (%s::double precision is null or (1-extensions.cosine_distance(c.embedding,%s::extensions.vector)) >= %s)
             order by extensions.cosine_distance(c.embedding,%s::extensions.vector)
             limit %s
             """,
-            (vector_literal, tenant_id, min_similarity, vector_literal, min_similarity, vector_literal, max(1, min(count, 50))),
+            (
+                vector_literal,
+                tenant_id,
+                tenant_id,
+                min_similarity,
+                vector_literal,
+                min_similarity,
+                vector_literal,
+                max(1, min(count, 50)),
+            ),
         )
 
     def match_file_chunks(

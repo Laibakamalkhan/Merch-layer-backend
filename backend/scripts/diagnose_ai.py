@@ -47,22 +47,21 @@ def main() -> int:
 
     from commerce_connector.api.deps import get_api_settings
     from commerce_connector.platform.db import PostgresGateway
-    from commerce_connector.platform.gemini import GeminiClient
+    from commerce_connector.platform.groq import GroqClient
 
     cfg = get_api_settings()
     print("\nConfig")
     print(f"  DATABASE_URL set : {bool(cfg.database_url)}")
-    print(f"  GEMINI_API_KEY   : {'set' if cfg.gemini_api_key else 'MISSING'}")
-    print(f"  Gemini model     : {cfg.gemini_model}")
-    print(f"  Embedding        : {cfg.embedding_provider} / {cfg.ollama_embedding_model if cfg.embedding_provider == 'ollama' else cfg.gemini_embedding_model} ({cfg.embedding_dimensions} dims)")
+    print(f"  GROQ_API_KEY   : {'set' if cfg.groq_api_key else 'MISSING'}")
+    print(f"  Groq model     : {cfg.groq_model}")
+    print(f"  Embedding        : {cfg.embedding_provider} / {cfg.ollama_embedding_model} ({cfg.embedding_dimensions} dims)")
 
     print("\nStages")
     db = PostgresGateway(cfg.database_url)
     ok = step("1. Database reachable", lambda: db.ping()["database"])
-    gem = GeminiClient(
-        cfg.gemini_api_key,
-        model=cfg.gemini_model,
-        embedding_model=cfg.gemini_embedding_model,
+    gem = GroqClient(
+        cfg.groq_api_key,
+        model=cfg.groq_model,
         embedding_dimensions=cfg.embedding_dimensions,
         embedding_provider=cfg.embedding_provider,
         ollama_base_url=cfg.ollama_base_url,
@@ -75,7 +74,22 @@ def main() -> int:
         return f"{len(emb)} dims"
 
     ok &= step("2. Embedding provider works", _embed)
-    ok &= step("3. Gemini text/JSON works", lambda: str(gem.generate_json('Return {"ok": true}')))
+    groq_diag_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["ok"],
+        "properties": {"ok": {"type": "boolean"}},
+    }
+    ok &= step(
+        "3. Groq text/JSON works",
+        lambda: str(
+            gem.generate_json(
+                'Return a JSON object with ok set to true.',
+                schema_name="diagnostic",
+                schema=groq_diag_schema,
+            )
+        ),
+    )
     ok &= step(
         "4. pgvector functions exist (extensions.cosine_distance)",
         lambda: db.fetch_one("select extensions.cosine_distance('[1,0]'::extensions.vector,'[0,1]'::extensions.vector) as d")["d"],

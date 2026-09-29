@@ -29,5 +29,5 @@ def test_openapi_has_no_backend_secret_fields_in_responses():
     schema = create_app().openapi()
     serialized = str(schema).lower()
     assert "supabase_service_role_key" not in serialized
-    assert "gemini_api_key" not in serialized
+    assert "groq_api_key" not in serialized
     assert "database_url" not in serialized

@@ -17,14 +17,14 @@ def models(current_user: CurrentUser = Depends(get_current_user)):
             {
                 "id": "merchlayer-2.0",
                 "name": "Merchlayer 2.0",
-                "provider": "gemini",
-                "backend_model": settings.gemini_model,
+                "provider": settings.llm_provider,
+                "backend_model": settings.groq_model,
                 "supports_reasoning": True,
                 "supports_files": True,
                 "supports_dashboards": True,
-                "available": bool(settings.gemini_api_key),
+                "available": bool(settings.groq_api_key),
                 "embedding_provider": settings.embedding_provider,
-                "embedding_model": settings.ollama_embedding_model if settings.embedding_provider == "ollama" else settings.gemini_embedding_model,
+                "embedding_model": settings.ollama_embedding_model,
                 "embedding_dimensions": settings.embedding_dimensions,
             }
         ],

@@ -2056,3 +2056,29 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+
+.ws-chart-card {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+.ws-chart-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.ws-line-chart-wrap { width: 100%; overflow-x: auto; }
+.ws-line-chart { display: block; width: 100%; min-width: 520px; height: 240px; }
+.ws-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-height: 230px;
+  overflow-x: auto;
+  padding: 18px 4px 4px;
+}
+.ws-bar-item { min-width: 58px; height: 210px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.ws-bar-value { font-size: 10px; opacity: 0.7; margin-bottom: 4px; }
+.ws-bar-track { width: 34px; height: 150px; display: flex; align-items: flex-end; border-radius: 6px; background: rgba(148, 163, 184, 0.08); overflow: hidden; }
+.ws-bar-fill { width: 100%; border-radius: 6px 6px 0 0; background: currentColor; opacity: 0.75; }
+.ws-bar-label { max-width: 80px; margin-top: 6px; font-size: 9px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -5,6 +5,7 @@ import {
   BarChart3, Layers, Database, ArrowRight, RefreshCw, Copy, CheckCircle2, FileText, Download
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import AnalyticsChart from './AnalyticsChart';
 import { useAuth } from '../../context/AuthContext';
 
 const STORES = [
@@ -28,7 +29,7 @@ const MORE_STORES = [
 ];
 
 const MODELS = [
-  { id: 'merchlayer-2.0', name: 'Merchlayer 2.0', desc: 'Commerce analytics engine (Gemini)' },
+  { id: 'merchlayer-2.0', name: 'Merchlayer 2.0', desc: 'Commerce analytics engine (Groq)' },
 ];
 
 const QUICK_PROMPTS = {
@@ -74,15 +75,21 @@ function computeKpis(dashboard, rows) {
   if (!dashboard?.kpis?.length || !rows?.length) return [];
   return dashboard.kpis.map((k) => {
     const nums = rows.map((r) => Number(r[k.column])).filter((n) => Number.isFinite(n));
-    const agg = (k.aggregation || 'sum').toLowerCase();
-    let v = 0;
-    if (agg === 'count') v = rows.length;
-    else if (agg === 'avg') v = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-    else if (agg === 'min') v = nums.length ? Math.min(...nums) : 0;
-    else if (agg === 'max') v = nums.length ? Math.max(...nums) : 0;
-    else v = nums.reduce((a, b) => a + b, 0);
+    const agg = (k.aggregation || 'value').toLowerCase();
+    let v = null;
+    if (agg === 'value') v = rows[0]?.[k.column];
+    else if (agg === 'count') v = rows.length;
+    else if (agg === 'avg') v = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+    else if (agg === 'min') v = nums.length ? Math.min(...nums) : null;
+    else if (agg === 'max') v = nums.length ? Math.max(...nums) : null;
+    else v = nums.length ? nums.reduce((a, b) => a + b, 0) : null;
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'string' && !Number.isFinite(Number(v))) {
+      return { label: k.label || k.column, value: v };
+    }
+    v = Number(v);
     return { label: k.label || k.column, value: v.toLocaleString(undefined, { maximumFractionDigits: 2 }) };
-  });
+  }).filter(Boolean);
 }
 
 function rowsToCsv(rows) {
@@ -99,7 +106,7 @@ function downloadCsv(rows) {
   URL.revokeObjectURL(url);
 }
 
-export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached }) {
+export default function WorkspaceChat({ initialStore = 'Shopify', onLimitReached }) {
   const { tenantId, user } = useAuth();
   const [conversationId, setConversationId] = useState(null);
   const [selectedStore, setSelectedStore] = useState(initialStore.toLowerCase());
@@ -158,7 +165,9 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
       setChatThread((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', ...base, data: res, timestamp: time() }]);
     } catch (err) {
       if (err.status === 402) onLimitReached?.();
-      const hint = err.status === 503 ? ' (Connect a store and run a sync first so the AI has data.)' : '';
+      const hint = err.status === 503 && /RAG index is empty/i.test(err.message || '')
+        ? ' (RAG index is empty. Rebuild it after syncing the store.)'
+        : '';
       setChatThread((prev) => [...prev, { id: Date.now() + 1, role: 'assistant', ...base, error: err.message + hint, timestamp: time() }]);
     } finally {
       clearInterval(ticker);
@@ -296,7 +305,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
               );
             })}
 
-            {/* More dropdown */}
             <div className="ws-more-wrapper" ref={moreRef}>
               <button
                 type="button"
@@ -309,18 +317,18 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
 
               {isMoreDropdownOpen && (
                 <div className="ws-more-dropdown">
-                  {MORE_STORES.map((ch) => (
+                  {MORE_STORES.map((store) => (
                     <button
-                      key={ch}
+                      key={store}
                       type="button"
                       className="ws-more-option"
                       onClick={() => {
-                        setSelectedStore(ch.toLowerCase());
+                        setSelectedStore(store.toLowerCase());
                         setIsMoreDropdownOpen(false);
                       }}
                     >
                       <Store size={14} />
-                      <span>{ch}</span>
+                      <span>{store}</span>
                     </button>
                   ))}
                 </div>
@@ -328,20 +336,21 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
             </div>
           </div>
 
-          {/* Quick starter prompts underneath */}
+          {/* Recommended prompts */}
           <div className="ws-quick-prompts">
             <div className="ws-quick-prompts__label">
-              <Sparkles size={13} /> Recommended prompts for {selectedStore.toUpperCase()}:
+              <Sparkles size={13} />
+              Recommended prompts for {selectedStore.toUpperCase()}:
             </div>
             <div className="ws-quick-prompts__grid">
-              {currentQuickPrompts.map((q, idx) => (
+              {currentQuickPrompts.map((prompt, idx) => (
                 <button
                   key={idx}
                   type="button"
                   className="ws-quick-prompt-btn"
-                  onClick={() => handleSend(q)}
+                  onClick={() => handleSend(prompt)}
                 >
-                  <span>{q}</span>
+                  <span>{prompt}</span>
                   <ArrowRight size={14} className="arrow-icon" />
                 </button>
               ))}
@@ -350,11 +359,10 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
         </div>
       )}
 
-      {/* Active Conversation View when queries are executed */}
       {chatThread.length > 0 && (
         <div className="workspace-chat-thread">
           <div className="workspace-chat-thread__header">
-            <button 
+            <button
               className="ws-btn ws-btn--secondary ws-btn--sm"
               onClick={() => {
                 setChatThread([]);
@@ -364,11 +372,14 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
             >
               <Plus size={14} /> New Chat
             </button>
-
             <div className="active-chat-info">
               <span className="info-tag store-badge">{selectedStore.toUpperCase()}</span>
               <span className="info-tag model-badge">{selectedModel.name}</span>
-              {isReasoningActive && <span className="info-tag reasoning-badge"><Brain size={12} /> Deep Reasoning</span>}
+              {isReasoningActive && (
+                <span className="info-tag reasoning-badge">
+                  <Brain size={12} /> Deep Reasoning
+                </span>
+              )}
             </div>
           </div>
 
@@ -395,42 +406,68 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
                     </div>
 
                     {msg.error ? (
-                      <div className="ws-assistant-summary"><p style={{ color: '#F87171' }}>⚠ {msg.error}</p></div>
+                      <div className="ws-assistant-summary">
+                        <p style={{ color: '#F87171' }}>⚠ {msg.error}</p>
+                      </div>
                     ) : (
                       <>
                         {toSteps(msg.data.reasoning).length > 0 && (
                           <details className="ws-reasoning-trace">
-                            <summary><Brain size={14} /><span>Reasoning</span></summary>
+                            <summary>
+                              <Brain size={14} />
+                              <span>Reasoning</span>
+                            </summary>
                             <div className="ws-reasoning-steps">
-                              {toSteps(msg.data.reasoning).map((step, i) => (
-                                <div key={i} className="ws-reasoning-step">
-                                  <CheckCircle2 size={13} className="step-check" /><span>{step}</span>
+                              {toSteps(msg.data.reasoning).map((step, idx) => (
+                                <div key={idx} className="ws-reasoning-step">
+                                  <CheckCircle2 size={13} className="step-check" />
+                                  <span>{step}</span>
                                 </div>
                               ))}
                             </div>
                           </details>
                         )}
 
-                        <div className="ws-assistant-summary"><p style={{ whiteSpace: 'pre-wrap' }}>{msg.data.answer}</p></div>
+                        <div className="ws-assistant-summary">
+                          <p style={{ whiteSpace: 'pre-wrap' }}>{msg.data.answer}</p>
+                        </div>
 
                         {computeKpis(msg.data.dashboard, msg.data.rows).length > 0 && (
                           <div className="ws-response-metrics-grid">
-                            {computeKpis(msg.data.dashboard, msg.data.rows).map((k, i) => (
-                              <div key={i} className="ws-metric-box">
-                                <span className="metric-label">{k.label}</span>
-                                <span className="metric-val">{k.value}</span>
+                            {computeKpis(msg.data.dashboard, msg.data.rows).map((kpi, idx) => (
+                              <div key={idx} className="ws-metric-box">
+                                <span className="metric-label">{kpi.label}</span>
+                                <span className="metric-val">{kpi.value}</span>
                               </div>
                             ))}
                           </div>
                         )}
 
+                        {msg.data.dashboard?.charts?.map((spec, idx) => (
+                          <AnalyticsChart
+                            key={`${spec.title || 'chart'}-${idx}`}
+                            spec={spec}
+                            rows={msg.data.rows}
+                          />
+                        ))}
+
                         {msg.data.rows?.length > 0 && (
                           <div className="ws-response-table-wrap">
                             <table className="ws-response-table">
-                              <thead><tr>{Object.keys(msg.data.rows[0]).map((c) => <th key={c}>{c}</th>)}</tr></thead>
+                              <thead>
+                                <tr>
+                                  {Object.keys(msg.data.rows[0]).map((col) => (
+                                    <th key={col}>{col}</th>
+                                  ))}
+                                </tr>
+                              </thead>
                               <tbody>
-                                {msg.data.rows.slice(0, 50).map((r, i) => (
-                                  <tr key={i}>{Object.keys(msg.data.rows[0]).map((c) => <td key={c}>{cell(r[c])}</td>)}</tr>
+                                {msg.data.rows.slice(0, 50).map((row, idx) => (
+                                  <tr key={idx}>
+                                    {Object.keys(msg.data.rows[0]).map((col) => (
+                                      <td key={col}>{cell(row[col])}</td>
+                                    ))}
+                                  </tr>
                                 ))}
                               </tbody>
                             </table>
@@ -439,8 +476,13 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
 
                         {msg.data.sql && (
                           <details className="ws-reasoning-trace">
-                            <summary><Database size={14} /><span>Show SQL</span></summary>
-                            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, padding: 12, margin: 0 }}>{msg.data.sql}</pre>
+                            <summary>
+                              <Database size={14} />
+                              <span>Show SQL</span>
+                            </summary>
+                            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, padding: 12, margin: 0 }}>
+                              {msg.data.sql}
+                            </pre>
                           </details>
                         )}
                       </>
@@ -448,11 +490,19 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
 
                     {!msg.error && (
                       <div className="ws-bubble-actions">
-                        <button className="ws-action-btn" title="Copy response" onClick={() => navigator.clipboard?.writeText(msg.data.answer || '')}>
+                        <button
+                          className="ws-action-btn"
+                          title="Copy response"
+                          onClick={() => navigator.clipboard?.writeText(msg.data.answer || '')}
+                        >
                           <Copy size={13} /> Copy Analysis
                         </button>
                         {msg.data.rows?.length > 0 && (
-                          <button className="ws-action-btn" title="Export as CSV" onClick={() => downloadCsv(msg.data.rows)}>
+                          <button
+                            className="ws-action-btn"
+                            title="Export as CSV"
+                            onClick={() => downloadCsv(msg.data.rows)}
+                          >
                             <Download size={13} /> Export CSV
                           </button>
                         )}
@@ -463,7 +513,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
               </div>
             ))}
 
-            {/* Generating live state */}
             {isGenerating && (
               <div className="ws-message ws-message--assistant ws-message--generating">
                 <div className="ws-assistant-bubble">
@@ -474,7 +523,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
                     <span className="bot-name">Merchlayer Commerce AI</span>
                     <span className="timestamp">Reasoning live...</span>
                   </div>
-
                   <div className="ws-generating-reasoning">
                     <div className="reasoning-pulse-bar">
                       <div className="pulse-bar-fill" />
@@ -494,7 +542,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
             )}
           </div>
 
-          {/* Sticky prompt bar at bottom during conversation */}
           <div className="workspace-thread-composer">
             <div className="ws-prompt-card ws-prompt-card--compact">
               <textarea
@@ -505,7 +552,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
                 onKeyDown={handleKeyDown}
                 rows={1}
               />
-
               <div className="ws-prompt-card__toolbar">
                 <div className="ws-prompt-card__tools-left">
                   <button className="ws-tool-btn ws-tool-btn--icon" type="button">
@@ -520,7 +566,6 @@ export default function WorkspaceChat({ initialStore = 'Amazon', onLimitReached 
                     <span>Reasoning</span>
                   </button>
                 </div>
-
                 <div className="ws-prompt-card__tools-right">
                   <button
                     type="button"

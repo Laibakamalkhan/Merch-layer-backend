@@ -64,7 +64,15 @@ export default function ConnectStoreModal({ platform, existing = null, onClose, 
 
       if (test?.skipped_resources?.length) setStep(test.message); // kuch resources is store par allowed nahi
       else setStep('Starting first data sync…');
-      await api.syncBackground({ tenant_id: tenantId, connection_ids: [conn.id], rebuild_rag_after_sync: true });
+      const task = await api.syncBackground({ tenant_id: tenantId, connection_ids: [conn.id], rebuild_rag_after_sync: true });
+      setStep('Syncing Shopify data and building AI index…');
+      const state = await api.waitForSyncTask(task.task_id);
+      if (state.status === 'failed') {
+        throw new Error(state.error || 'Background sync failed.');
+      }
+      if (state.result?.rag_error) {
+        throw new Error(`Data sync completed, but RAG index failed: ${state.result.rag_error}`);
+      }
       pendingConnId.current = null;
       onConnected();
     } catch (err) {

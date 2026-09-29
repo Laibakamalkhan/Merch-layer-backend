@@ -14,9 +14,10 @@ class PlatformSettings:
     database_url: str
     supabase_url: str = ""
     supabase_service_role_key: str = ""
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
-    gemini_embedding_model: str = "gemini-embedding-001"
+    llm_provider: str = "groq"
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_use_system_proxy: bool = False
     embedding_dimensions: int = 768
     embedding_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
@@ -36,7 +37,9 @@ class PlatformSettings:
             raise ValueError("Supabase URL and service-role key are required for Bronze object storage.")
 
     def validate_ai(self) -> None:
-        if not self.gemini_api_key.strip():
-            raise ValueError("Gemini API key is required for AI Analyst text generation.")
-        if self.embedding_provider not in {"ollama", "gemini"}:
-            raise ValueError("EMBEDDING_PROVIDER must be 'ollama' or 'gemini'.")
+        if self.llm_provider != "groq":
+            raise ValueError("LLM_PROVIDER must currently be 'groq'.")
+        if not self.groq_api_key.strip():
+            raise ValueError("Groq API key is required for AI Analyst text generation.")
+        if self.embedding_provider != "ollama":
+            raise ValueError("EMBEDDING_PROVIDER must remain 'ollama' for the existing 768-dimensional RAG index.")

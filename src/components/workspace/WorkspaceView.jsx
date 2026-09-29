@@ -14,7 +14,7 @@ export default function WorkspaceView({ onBackToLanding }) {
   const [currentTab, setCurrentTab] = useState('chat'); // 'chat' | 'connectors' | 'library' | 'files'
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
-  const [activeStoreForChat, setActiveStoreForChat] = useState('Amazon');
+  const [activeStoreForChat, setActiveStoreForChat] = useState('Shopify');
 
   const handleNewTask = () => {
     setCurrentTab('chat');

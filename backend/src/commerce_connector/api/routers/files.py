@@ -105,7 +105,7 @@ def reindex_file(file_id: UUID, tenant_id: UUID, current_user: CurrentUser = Dep
     if not row:
         raise HTTPException(status_code=404, detail="File not found")
     if not service.indexer:
-        raise HTTPException(status_code=503, detail="Gemini API key is required for embeddings")
+        raise HTTPException(status_code=503, detail="Groq API key is required to initialize the AI/RAG service")
     if not str(row.get("content") or "").strip():
         raise HTTPException(status_code=400, detail="This file type has no extracted text to index")
     chunks = service.indexer.index_document(str(tenant_id), row)

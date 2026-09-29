@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from commerce_connector.platform.db import PostgresGateway
-from commerce_connector.platform.gemini import GeminiClient
+from commerce_connector.platform.llm import LLMClient
 
 
 def _hash(text: str) -> str:
@@ -29,9 +29,9 @@ def _chunks(text: str, max_chars: int = 2600) -> list[str]:
 
 
 class SemanticIndexer:
-    def __init__(self, db: PostgresGateway, gemini: GeminiClient):
+    def __init__(self, db: PostgresGateway, llm: LLMClient):
         self.db = db
-        self.gemini = gemini
+        self.llm = llm
 
     def build_documents(self, tenant_id: str) -> list[dict[str, Any]]:
         snapshot = self.db.semantic_catalog_snapshot(tenant_id)
@@ -103,7 +103,7 @@ class SemanticIndexer:
             for index, content in enumerate(_chunks(doc["content"])):
                 if not content.strip():
                     continue
-                embedding = self.gemini.embed(
+                embedding = self.llm.embed(
                     content,
                     task="document",
                     title=doc["title"],
@@ -115,7 +115,7 @@ class SemanticIndexer:
                     "token_count": None,
                     "content_hash": _hash(content),
                     "embedding": vector_literal,
-                    "embedding_model": self.gemini.embedding_model if self.gemini.embedding_provider == "gemini" else self.gemini.ollama_embedding_model,
+                    "embedding_model": self.llm.ollama_embedding_model,
                     "metadata": doc.get("metadata") or {},
                 })
             if not prepared_chunks:
@@ -125,19 +125,19 @@ class SemanticIndexer:
 
     def index_document(self, tenant_id: str, document: dict[str, Any]) -> int:
         """Embed one existing ai.documents row without rebuilding the semantic catalog."""
-        embedding_model = self.gemini.embedding_model if self.gemini.embedding_provider == "gemini" else self.gemini.ollama_embedding_model
+        embedding_model = self.llm.ollama_embedding_model
         embedding_job = self.db.create_embedding_job(
             tenant_id,
             document["id"],
             embedding_model,
-            self.gemini.embedding_dimensions,
+            self.llm.embedding_dimensions,
         )
         try:
             chunks = []
             for index, content in enumerate(_chunks(str(document.get("content") or ""))):
                 if not content.strip():
                     continue
-                embedding = self.gemini.embed(content, task="document", title=document.get("title"))
+                embedding = self.llm.embed(content, task="document", title=document.get("title"))
                 vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
                 chunks.append({
                     "chunk_index": index,
@@ -161,22 +161,18 @@ class SemanticIndexer:
         result = self.db.replace_semantic_documents_with_chunks(
             tenant_id,
             prepared,
-            embedding_model=(
-                self.gemini.embedding_model
-                if self.gemini.embedding_provider == "gemini"
-                else self.gemini.ollama_embedding_model
-            ),
-            output_dimensions=self.gemini.embedding_dimensions,
+            embedding_model=self.llm.ollama_embedding_model,
+            output_dimensions=self.llm.embedding_dimensions,
         )
         return result
 
 
 class RagRetriever:
-    def __init__(self, db: PostgresGateway, gemini: GeminiClient):
+    def __init__(self, db: PostgresGateway, llm: LLMClient):
         self.db = db
-        self.gemini = gemini
+        self.llm = llm
 
     def retrieve(self, tenant_id: str, question: str, count: int = 8) -> list[dict[str, Any]]:
-        embedding = self.gemini.embed(question, task="query")
+        embedding = self.llm.embed(question, task="query")
         # Semantic catalog chhota hai; top-k recall ko similarity threshold se block na karein.
         return self.db.match_chunks(tenant_id, embedding, count=count, min_similarity=None)

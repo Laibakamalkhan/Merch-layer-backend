@@ -19,9 +19,10 @@ class APISettings:
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     supabase_anon_key: str = ""
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
-    gemini_embedding_model: str = "gemini-embedding-001"
+    llm_provider: str = "groq"
+    groq_api_key: str = ""
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_use_system_proxy: bool = False
     embedding_dimensions: int = 768
     embedding_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
@@ -49,9 +50,10 @@ class APISettings:
             supabase_url=os.getenv("SUPABASE_URL", "").strip(),
             supabase_service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
             supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", "").strip(),
-            gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip(),
-            gemini_embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip(),
+            llm_provider=os.getenv("LLM_PROVIDER", "groq").strip().lower(),
+            groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
+            groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip(),
+            groq_use_system_proxy=os.getenv("GROQ_USE_SYSTEM_PROXY", "false").strip().lower() in {"1", "true", "yes", "on"},
             embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "768")),
             embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama").strip().lower(),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/"),

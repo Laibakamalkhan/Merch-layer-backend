@@ -62,8 +62,11 @@ export default function StoreConnectorsTab({ onSelectStoreForChat }) {
     if (!ids.length) return;
     setIsSyncingAll(true);
     try {
-      await api.syncBackground({ tenant_id: tenantId, connection_ids: ids, rebuild_rag_after_sync: true });
-      setTimeout(load, 3000);
+      const task = await api.syncBackground({ tenant_id: tenantId, connection_ids: ids, rebuild_rag_after_sync: true });
+      const state = await api.waitForSyncTask(task.task_id);
+      if (state.status === 'failed') throw new Error(state.error || 'Background sync failed.');
+      if (state.result?.rag_error) throw new Error(`Sync completed, but RAG failed: ${state.result.rag_error}`);
+      await load();
     } catch (err) {
       setLoadError(err.message);
     } finally {

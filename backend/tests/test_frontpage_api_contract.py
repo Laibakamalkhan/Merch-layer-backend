@@ -33,5 +33,5 @@ def test_frontpage_product_endpoints_exist():
 def test_no_backend_secret_values_in_openapi():
     text = str(create_app().openapi()).lower()
     assert "your_server_side_service_role_key" not in text
-    assert "your_gemini_api_key" not in text
+    assert "your_groq_api_key" not in text
     assert "database_url" not in text

@@ -172,7 +172,7 @@ def test_free_plan_limit_returns_402_and_does_not_call_ai(env):
 def test_ai_errors_are_mapped(env):
     client, service, _ = env
     cid = _make_conversation(client)
-    service.fail_with = RuntimeError("Gemini API key is required")
+    service.fail_with = RuntimeError("Groq API key is required")
     assert client.post(f"/api/v1/conversations/{cid}/messages", json={"tenant_id": TENANT, "content": "hello"}).status_code == 503
     service.fail_with = ValueError("Unsupported model_id: x")
     assert client.post(f"/api/v1/conversations/{cid}/messages", json={"tenant_id": TENANT, "content": "hello"}).status_code == 400
@@ -291,7 +291,7 @@ def test_protected_routes_require_a_bearer_token():
 
 
 def test_provider_and_database_failures_become_clean_json_errors(env):
-    """Gemini network errors / DB errors used to escape as a bare 500 with no message."""
+    """Groq network errors / DB errors used to escape as a bare 500 with no message."""
     import httpx
     import psycopg
 
@@ -306,7 +306,7 @@ def test_provider_and_database_failures_become_clean_json_errors(env):
 
     service.fail_with = httpx.ConnectError("no internet")
     r = client.post(url, json=body)
-    assert r.status_code == 502 and "Gemini" in r.json()["detail"]
+    assert r.status_code == 502 and "Groq" in r.json()["detail"]
 
     service.fail_with = psycopg.OperationalError("connection dropped")
     r = client.post(url, json=body)

@@ -9,6 +9,25 @@ from typing import Any
 import httpx
 
 
+class GeminiTransportError(RuntimeError):
+    """Gemini request could not establish/maintain an HTTPS connection."""
+
+
+class GeminiAPIError(RuntimeError):
+    """Gemini returned a valid HTTP error response."""
+
+    def __init__(self, status_code: int, body: str | bytes):
+        self.status_code = status_code
+        self.body = (
+            body.decode("utf-8", errors="replace")
+            if isinstance(body, bytes)
+            else str(body)
+        )
+        super().__init__(
+            f"Gemini API returned HTTP {status_code}: {self.body[:1200]}"
+        )
+
+
 class _GeminiResponse:
     """Small response wrapper compatible with the existing Gemini code."""
 
@@ -47,10 +66,12 @@ class GeminiClient:
         self.embedding_dimensions = embedding_dimensions
         self.embedding_provider = embedding_provider.strip().lower() or "ollama"
         self.ollama_base_url = (
-            ollama_base_url.strip().rstrip("/") or "http://localhost:11434"
+            ollama_base_url.strip().rstrip("/")
+            or "http://localhost:11434"
         )
         self.ollama_embedding_model = (
-            ollama_embedding_model.strip() or "embeddinggemma:latest"
+            ollama_embedding_model.strip()
+            or "embeddinggemma:latest"
         )
 
         if self.embedding_provider not in {"ollama", "gemini"}:
@@ -58,8 +79,39 @@ class GeminiClient:
                 "EMBEDDING_PROVIDER must be 'ollama' or 'gemini'."
             )
 
+    @staticmethod
+    def _create_ssl_context() -> ssl.SSLContext:
+        """
+        Create a secure TLS context compatible with Google's
+        TLS renegotiation behavior.
+
+        Certificate verification remains enabled through
+        ssl.create_default_context().
+
+        OpenSSL 3 may reject certain legacy server-side
+        renegotiation patterns unless OP_LEGACY_SERVER_CONNECT
+        is enabled. Windows Schannel accepts this connection,
+        and enabling this OpenSSL option makes Python behave
+        compatibly without disabling TLS certificate validation.
+        """
+        context = ssl.create_default_context()
+
+        legacy_server_connect = getattr(
+            ssl,
+            "OP_LEGACY_SERVER_CONNECT",
+            0,
+        )
+
+        if legacy_server_connect:
+            context.options |= legacy_server_connect
+
+        return context
+
     def _url(self, model: str, action: str) -> str:
-        return f"{self.API_ROOT}/models/{model}:{action}?key={self.api_key}"
+        return (
+            f"{self.API_ROOT}/models/{model}:{action}"
+            f"?key={self.api_key}"
+        )
 
     def _post(
         self,
@@ -84,18 +136,27 @@ class GeminiClient:
         }
 
         request_body = json.dumps(payload).encode("utf-8")
-        ssl_context = ssl.create_default_context()
+
+        # Keep certificate verification enabled while allowing
+        # OpenSSL 3 to communicate with servers that request
+        # legacy TLS renegotiation.
+        ssl_context = self._create_ssl_context()
 
         if use_system_proxy:
-            # Allow urllib to use environment/system-configured proxy settings.
+            # Allow urllib to use environment/system-configured
+            # proxy settings.
             opener = urllib.request.build_opener(
-                urllib.request.HTTPSHandler(context=ssl_context)
+                urllib.request.HTTPSHandler(
+                    context=ssl_context,
+                )
             )
         else:
             # Direct connection: disable proxy autodetection.
             opener = urllib.request.build_opener(
                 urllib.request.ProxyHandler({}),
-                urllib.request.HTTPSHandler(context=ssl_context),
+                urllib.request.HTTPSHandler(
+                    context=ssl_context,
+                ),
             )
 
         max_attempts = 6
@@ -119,15 +180,18 @@ class GeminiClient:
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "User-Agent": (
-                        "shopify-ai-analytics-platform/1.0"
-                    ),
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                    "User-Agent": "shopify-ai-analytics-platform/1.0",
                 },
                 method="POST",
             )
 
             try:
-                with opener.open(request, timeout=90) as response:
+                with opener.open(
+                    request,
+                    timeout=90,
+                ) as response:
                     body = response.read()
 
                     return _GeminiResponse(
@@ -198,9 +262,11 @@ class GeminiClient:
                     time.sleep(delay)
                     continue
 
-                raise RuntimeError(
-                    "Gemini server se HTTPS connection establish "
-                    "nahi ho saka after multiple retries. "
+                raise GeminiTransportError(
+                    "Gemini HTTPS transport failed after "
+                    f"{max_attempts} attempts. "
+                    "This is a network/TLS/proxy connection failure, "
+                    "not an HTTP response from Gemini. "
                     f"Error: {type(exc).__name__}: {exc}"
                 ) from None
 
@@ -235,15 +301,17 @@ class GeminiClient:
             }
 
         response = self._post(
-            self._url(self.model, "generateContent"),
+            self._url(
+                self.model,
+                "generateContent",
+            ),
             payload,
         )
 
         if response.status_code >= 300:
-            raise RuntimeError(
-                "Gemini generateContent failed "
-                f"({response.status_code}): "
-                f"{response.text[:800]}"
+            raise GeminiAPIError(
+                response.status_code,
+                response.text,
             )
 
         try:
@@ -295,15 +363,17 @@ class GeminiClient:
             }
 
         response = self._post(
-            self._url(self.model, "generateContent"),
+            self._url(
+                self.model,
+                "generateContent",
+            ),
             payload,
         )
 
         if response.status_code >= 300:
-            raise RuntimeError(
-                "Gemini JSON generation failed "
-                f"({response.status_code}): "
-                f"{response.text[:800]}"
+            raise GeminiAPIError(
+                response.status_code,
+                response.text,
             )
 
         try:
@@ -478,10 +548,9 @@ class GeminiClient:
         )
 
         if response.status_code >= 300:
-            raise RuntimeError(
-                "Gemini embedding failed "
-                f"({response.status_code}): "
-                f"{response.text[:800]}"
+            raise GeminiAPIError(
+                response.status_code,
+                response.text,
             )
 
         try:

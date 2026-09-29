@@ -95,7 +95,7 @@ def main() -> int:
     r = c.get(f"{API}/models")
     check("GET /models", r.status_code == 200 and r.json().get("items"), f"{r.status_code} {r.text[:200]}")
     if r.status_code == 200:
-        check("  AI model available (GEMINI_API_KEY set)", bool(r.json()["items"][0].get("available")), "available=false -> set GEMINI_API_KEY")
+        check("  AI model available (GROQ_API_KEY set)", bool(r.json()["items"][0].get("available")), "available=false -> set GROQ_API_KEY")
     r = c.get(f"{API}/prompts", params=q)
     check("GET /prompts", r.status_code == 200 and len(r.json().get("items", [])) > 0, f"{r.status_code} {r.text[:200]}")
     r = c.get(f"{API}/subscription", params=q)
@@ -120,7 +120,7 @@ def main() -> int:
     check("GET /conversations/{id}", r.status_code == 200 and r.json().get("id") == cid, f"{r.status_code} {r.text[:200]}")
 
     if args.ask:
-        print("\n5) AI (real question - needs synced data + GEMINI_API_KEY)")
+        print("\n5) AI (real question - needs synced data + GROQ_API_KEY)")
         r = c.post(f"{API}/conversations/{cid}/messages", json={"tenant_id": tenant_id, "content": "Give me a summary of my total sales for the last 30 days."})
         ok = check("POST /conversations/{id}/messages -> AI answer", r.status_code == 201 and bool(r.json().get("answer")), f"{r.status_code} {r.text[:300]}")
         if ok:

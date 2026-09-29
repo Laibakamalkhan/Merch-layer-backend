@@ -72,9 +72,15 @@ async function request(path, { method = 'GET', query, body, form, auth = true, _
   const session = sessionStore.get();
   if (auth && session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
 
+  const requestInit = { method, headers };
+  if (method !== 'GET' && method !== 'HEAD') {
+    const requestBody = form || (body ? JSON.stringify(body) : undefined);
+    if (requestBody !== undefined) requestInit.body = requestBody;
+  }
+
   let res;
   try {
-    res = await fetch(url, { method, headers, body: form || (body ? JSON.stringify(body) : undefined) });
+    res = await fetch(url, requestInit);
   } catch {
     throw new ApiError(0, 'Cannot reach the server. Is the backend running on port 8000?');
   }
@@ -116,6 +122,15 @@ export const api = {
   testConnection: (id) => request(`/connections/${id}/test`, { method: 'POST' }),
   syncBackground: (b) => request('/sync/background', { method: 'POST', body: b }),
   syncTask: (id) => request(`/sync/tasks/${id}`),
+  waitForSyncTask: async (id, { intervalMs = 1500, timeoutMs = 10 * 60 * 1000 } = {}) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const state = await request(`/sync/tasks/${id}`);
+      if (state.status === 'completed' || state.status === 'failed') return state;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new ApiError(408, 'Sync task timed out. Check the Sync Jobs page/logs.');
+  },
   // chat
   createConversation: (b) => request('/conversations', { method: 'POST', body: b }),
   sendMessage: (id, b) => request(`/conversations/${id}/messages`, { method: 'POST', body: b }),

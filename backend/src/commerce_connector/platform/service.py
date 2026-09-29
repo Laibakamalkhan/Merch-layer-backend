@@ -11,7 +11,7 @@ from commerce_connector.core.connector import UniversalCommerceConnector
 from commerce_connector.platform.ai_analyst import AIAnalyst
 from commerce_connector.platform.bronze import BronzeWriter
 from commerce_connector.platform.db import PostgresGateway
-from commerce_connector.platform.gemini import GeminiClient
+from commerce_connector.platform.groq import GroqClient
 from commerce_connector.platform.gold import GoldRefresher
 from commerce_connector.platform.manifest_runtime import RuntimeManifestFactory
 from commerce_connector.platform.orchestrator import SyncOrchestrator
@@ -104,28 +104,28 @@ class CommercePlatformService:
             max_concurrency=settings.max_concurrent_connections,
             max_pages_per_resource=settings.max_pages_per_resource,
         )
-        self.gemini = None
+        self.llm = None
         self.indexer = None
         self.analyst = None
-        if settings.gemini_api_key:
-            self.gemini = GeminiClient(
-                settings.gemini_api_key,
-                model=settings.gemini_model,
-                embedding_model=settings.gemini_embedding_model,
+        if settings.llm_provider == "groq" and settings.groq_api_key:
+            self.llm = GroqClient(
+                settings.groq_api_key,
+                model=settings.groq_model,
                 embedding_dimensions=settings.embedding_dimensions,
                 embedding_provider=settings.embedding_provider,
                 ollama_base_url=settings.ollama_base_url,
                 ollama_embedding_model=settings.ollama_embedding_model,
+                use_system_proxy=settings.groq_use_system_proxy,
             )
-            self.indexer = SemanticIndexer(self.db, self.gemini)
-            self.analyst = AIAnalyst(self.db, self.gemini)
+            self.indexer = SemanticIndexer(self.db, self.llm)
+            self.analyst = AIAnalyst(self.db, self.llm)
 
     def health(self) -> dict[str, Any]:
         return self.db.ping()
 
     def rebuild_rag(self, tenant_id: str) -> dict[str, int]:
         if not self.indexer:
-            raise RuntimeError("Gemini API key is required")
+            raise RuntimeError("Groq API key is required")
         result = self.indexer.rebuild(tenant_id)
         self.db.increment_usage(tenant_id, api_requests=1)
         return result
@@ -142,7 +142,7 @@ class CommercePlatformService:
         file_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         if not self.analyst:
-            raise RuntimeError("Gemini API key is required")
+            raise RuntimeError("Groq API key is required")
         if model_id != "merchlayer-2.0":
             raise ValueError(f"Unsupported model_id: {model_id}")
         result = self.analyst.ask(
@@ -167,7 +167,7 @@ class CommercePlatformService:
         if rebuild_rag_after_sync:
             if not self.indexer:
                 # Pehle yeh chup-chaap skip ho jata tha. Ab saaf likha aata hai ke kyun index nahi bana.
-                result["rag_error"] = "GEMINI_API_KEY set nahi hai, isliye AI index nahi bana."
+                result["rag_error"] = "GROQ_API_KEY set nahi hai, isliye AI index nahi bana."
             else:
                 try:
                     # to_thread: embedding ke sync HTTP calls poora server block na karein.

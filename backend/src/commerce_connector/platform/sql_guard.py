@@ -61,8 +61,36 @@ class SQLGuard:
             if self.allowed_tables is not None and ref not in self.allowed_tables:
                 return GuardResult(False, candidate, f"Table not allowed: {ref[0]}.{ref[1]}")
 
-        # All tenant-scoped analytics queries must include a direct tenant predicate.
-        if not re.search(r"\btenant_id\s*=\s*:tenant_id\b|\b[a-z_][a-z0-9_]*\.tenant_id\s*=\s*:tenant_id\b", candidate, re.IGNORECASE):
+        # Every Silver/Gold table reference must be tenant-scoped. This prevents a
+        # generated query from filtering one table while accidentally scanning another
+        # tenant's rows through a join or CTE.
+        table_refs = re.findall(
+            r"\b(?:from|join)\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)(?:\s+(?:as\s+)?(?!where\b|join\b|on\b|group\b|order\b|limit\b|left\b|right\b|inner\b|outer\b|full\b|cross\b|union\b|having\b)([a-z_][a-z0-9_]*))?",
+            candidate,
+            re.IGNORECASE,
+        )
+        for schema, table, alias in table_refs:
+            if schema.lower() not in {"silver", "gold"}:
+                continue
+            qualifier = (alias or table).lower()
+            patterns = [
+                rf"\b{re.escape(qualifier)}\.tenant_id\s*=\s*:tenant_id\b",
+                rf"\b{re.escape(table.lower())}\.tenant_id\s*=\s*:tenant_id\b",
+            ]
+            if not alias:
+                patterns.append(r"(?<![.\w])tenant_id\s*=\s*:tenant_id\b")
+            if not any(re.search(pattern, candidate, re.IGNORECASE) for pattern in patterns):
+                return GuardResult(
+                    False,
+                    candidate,
+                    f"Tenant filter missing for {schema}.{table}" + (f" (alias {alias})" if alias else ""),
+                )
+
+        if not re.search(
+            r"\btenant_id\s*=\s*:tenant_id\b|\b[a-z_][a-z0-9_]*\.tenant_id\s*=\s*:tenant_id\b",
+            candidate,
+            re.IGNORECASE,
+        ):
             return GuardResult(False, candidate, "An explicit tenant_id = :tenant_id predicate is required")
 
         # Convert the model-facing placeholder into psycopg named-parameter syntax.

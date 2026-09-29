@@ -14,7 +14,7 @@ FastAPI V6
         ├── Platforms / Store Connections
         ├── Multi-store Sync
         ├── Bronze → Silver → Gold
-        ├── Gemini + RAG + SQL Guard
+        ├── Groq + RAG + SQL Guard
         ├── AI chat + SSE lifecycle stream
         ├── Dashboard JSON
         └── Plans / Usage / Upgrade Intent
@@ -35,9 +35,8 @@ DATABASE_URL=
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+GROQ_API_KEY=
+GROQ_MODEL=openai/gpt-oss-20b
 EMBEDDING_DIMENSIONS=768
 BRONZE_BUCKET=commerce-bronze
 USER_FILES_BUCKET=commerce-files
@@ -49,7 +48,7 @@ BILLING_CHECKOUT_URL=
 CORS_ORIGINS=http://localhost:3000
 ```
 
-The browser uses only the Supabase user access token returned by `/api/v1/auth/login`. Service-role/database/Gemini/ecommerce credentials remain server-side.
+The browser uses only the Supabase user access token returned by `/api/v1/auth/login`. Service-role/database/Groq/ecommerce credentials remain server-side.
 
 ## Install and run
 
@@ -112,13 +111,13 @@ conversation history
         ↓
 semantic RAG (schema / metrics / stores)
         ↓
-Gemini query plan
+Groq query plan
         ↓
 SQL Guard
         ↓
 PostgreSQL calculation over Gold/Silver
         ↓
-Gemini explanation + dashboard JSON
+Groq explanation + dashboard JSON
         ↓
 ai.query_runs / generated_queries / messages / dashboard_specs
 ```
