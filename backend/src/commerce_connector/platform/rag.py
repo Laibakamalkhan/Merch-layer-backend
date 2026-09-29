@@ -92,16 +92,52 @@ class SemanticIndexer:
         })
         return docs
 
+    def _prepare_embedded_docs(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Generate every vector BEFORE replacing the live index.
+
+        Agar embedding provider fail ho jaye to old working RAG index intact rehta hai.
+        """
+        prepared: list[dict[str, Any]] = []
+        for doc in docs:
+            prepared_chunks: list[dict[str, Any]] = []
+            for index, content in enumerate(_chunks(doc["content"])):
+                if not content.strip():
+                    continue
+                embedding = self.gemini.embed(
+                    content,
+                    task="document",
+                    title=doc["title"],
+                )
+                vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
+                prepared_chunks.append({
+                    "chunk_index": index,
+                    "content": content,
+                    "token_count": None,
+                    "content_hash": _hash(content),
+                    "embedding": vector_literal,
+                    "embedding_model": self.gemini.embedding_model if self.gemini.embedding_provider == "gemini" else self.gemini.ollama_embedding_model,
+                    "metadata": doc.get("metadata") or {},
+                })
+            if not prepared_chunks:
+                raise RuntimeError(f"Document '{doc['title']}' produced no chunks")
+            prepared.append({**doc, "chunks": prepared_chunks})
+        return prepared
 
     def index_document(self, tenant_id: str, document: dict[str, Any]) -> int:
         """Embed one existing ai.documents row without rebuilding the semantic catalog."""
-        embedding_job = self.db.create_embedding_job(tenant_id, document["id"], self.gemini.embedding_model)
+        embedding_model = self.gemini.embedding_model if self.gemini.embedding_provider == "gemini" else self.gemini.ollama_embedding_model
+        embedding_job = self.db.create_embedding_job(
+            tenant_id,
+            document["id"],
+            embedding_model,
+            self.gemini.embedding_dimensions,
+        )
         try:
             chunks = []
             for index, content in enumerate(_chunks(str(document.get("content") or ""))):
                 if not content.strip():
                     continue
-                embedding = self.gemini.embed(content)
+                embedding = self.gemini.embed(content, task="document", title=document.get("title"))
                 vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
                 chunks.append({
                     "chunk_index": index,
@@ -109,7 +145,7 @@ class SemanticIndexer:
                     "token_count": None,
                     "content_hash": _hash(content),
                     "embedding": vector_literal,
-                    "embedding_model": self.gemini.embedding_model,
+                    "embedding_model": embedding_model,
                     "metadata": document.get("metadata") or {},
                 })
             self.db.replace_document_chunks(document["id"], tenant_id, chunks)
@@ -120,31 +156,19 @@ class SemanticIndexer:
             raise
 
     def rebuild(self, tenant_id: str) -> dict[str, int]:
-        docs = self.db.replace_semantic_documents(tenant_id, self.build_documents(tenant_id))
-        chunk_count = 0
-        for doc in docs:
-            embedding_job = self.db.create_embedding_job(tenant_id, doc["id"], self.gemini.embedding_model)
-            try:
-                chunks = []
-                for index, content in enumerate(_chunks(doc["content"])):
-                    embedding = self.gemini.embed(content)
-                    vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
-                    chunks.append({
-                        "chunk_index": index,
-                        "content": content,
-                        "token_count": None,
-                        "content_hash": _hash(content),
-                        "embedding": vector_literal,
-                        "embedding_model": self.gemini.embedding_model,
-                        "metadata": doc.get("metadata") or {},
-                    })
-                self.db.replace_document_chunks(doc["id"], tenant_id, chunks)
-                self.db.finish_embedding_job(embedding_job["id"], "completed")
-                chunk_count += len(chunks)
-            except Exception as exc:
-                self.db.finish_embedding_job(embedding_job["id"], "failed", f"{type(exc).__name__}: {exc}")
-                raise
-        return {"documents": len(docs), "chunks": chunk_count}
+        docs = self.build_documents(tenant_id)
+        prepared = self._prepare_embedded_docs(docs)
+        result = self.db.replace_semantic_documents_with_chunks(
+            tenant_id,
+            prepared,
+            embedding_model=(
+                self.gemini.embedding_model
+                if self.gemini.embedding_provider == "gemini"
+                else self.gemini.ollama_embedding_model
+            ),
+            output_dimensions=self.gemini.embedding_dimensions,
+        )
+        return result
 
 
 class RagRetriever:
@@ -153,5 +177,6 @@ class RagRetriever:
         self.gemini = gemini
 
     def retrieve(self, tenant_id: str, question: str, count: int = 8) -> list[dict[str, Any]]:
-        embedding = self.gemini.embed(question)
-        return self.db.match_chunks(tenant_id, embedding, count=count)
+        embedding = self.gemini.embed(question, task="query")
+        # Semantic catalog chhota hai; top-k recall ko similarity threshold se block na karein.
+        return self.db.match_chunks(tenant_id, embedding, count=count, min_similarity=None)

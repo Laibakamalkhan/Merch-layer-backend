@@ -773,7 +773,72 @@ class PostgresGateway:
                     ),
                 )
 
-    def match_chunks(self, tenant_id: str | UUID, embedding: list[float], count: int = 8, min_similarity: float = 0.35) -> list[dict[str, Any]]:
+    def replace_semantic_documents_with_chunks(
+        self,
+        tenant_id: str | UUID,
+        documents: list[dict[str, Any]],
+        *,
+        embedding_model: str,
+        output_dimensions: int,
+    ) -> dict[str, int]:
+        """Atomically replace semantic documents and all of their vector chunks."""
+        document_count = 0
+        chunk_count = 0
+        with self.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "delete from ai.documents where tenant_id=%s and source_type in ('schema','metric','connection')",
+                (tenant_id,),
+            )
+            for doc in documents:
+                cur.execute(
+                    """
+                    insert into ai.documents(tenant_id,source_type,source_ref,title,content,content_hash,metadata)
+                    values (%s,%s,%s,%s,%s,%s,%s::jsonb)
+                    returning id
+                    """,
+                    (
+                        tenant_id,
+                        doc["source_type"],
+                        doc.get("source_ref"),
+                        doc["title"],
+                        doc["content"],
+                        doc.get("content_hash"),
+                        json.dumps(doc.get("metadata") or {}),
+                    ),
+                )
+                document_id = cur.fetchone()["id"]
+                document_count += 1
+                cur.execute(
+                    """
+                    insert into ai.embedding_jobs(tenant_id,document_id,status,model_name,output_dimensionality,started_at,finished_at)
+                    values (%s,%s,'completed',%s,%s,now(),now())
+                    """,
+                    (tenant_id, document_id, embedding_model, output_dimensions),
+                )
+                for chunk in doc["chunks"]:
+                    cur.execute(
+                        """
+                        insert into ai.document_chunks(
+                          tenant_id,document_id,chunk_index,content,token_count,content_hash,
+                          embedding,embedding_model,metadata
+                        ) values (%s,%s,%s,%s,%s,%s,%s::extensions.vector,%s,%s::jsonb)
+                        """,
+                        (
+                            tenant_id,
+                            document_id,
+                            chunk["chunk_index"],
+                            chunk["content"],
+                            chunk.get("token_count"),
+                            chunk.get("content_hash"),
+                            chunk["embedding"],
+                            embedding_model,
+                            json.dumps(chunk.get("metadata") or {}),
+                        ),
+                    )
+                    chunk_count += 1
+        return {"documents": document_count, "chunks": chunk_count}
+
+    def match_chunks(self, tenant_id: str | UUID, embedding: list[float], count: int = 8, min_similarity: float | None = 0.35) -> list[dict[str, Any]]:
         """Match only shared semantic catalog chunks, never user-uploaded file chunks."""
         vector_literal = "[" + ",".join(f"{float(v):.10g}" for v in embedding) + "]"
         return self.fetch_all(
@@ -786,11 +851,11 @@ class PostgresGateway:
             where c.embedding is not null
               and (c.tenant_id is null or c.tenant_id=%s)
               and d.source_type in ('schema','metric','connection')
-              and (1-extensions.cosine_distance(c.embedding,%s::extensions.vector)) >= %s
+              and (%s::double precision is null or (1-extensions.cosine_distance(c.embedding,%s::extensions.vector)) >= %s)
             order by extensions.cosine_distance(c.embedding,%s::extensions.vector)
             limit %s
             """,
-            (vector_literal, tenant_id, vector_literal, min_similarity, vector_literal, max(1, min(count, 50))),
+            (vector_literal, tenant_id, min_similarity, vector_literal, min_similarity, vector_literal, max(1, min(count, 50))),
         )
 
     def match_file_chunks(
@@ -1270,13 +1335,13 @@ class PostgresGateway:
             (tenant_id, days),
         )
 
-    def create_embedding_job(self, tenant_id: str | UUID, document_id: str | UUID, model_name: str) -> dict[str, Any]:
+    def create_embedding_job(self, tenant_id: str | UUID, document_id: str | UUID, model_name: str, output_dimensions: int = 768) -> dict[str, Any]:
         row = self.fetch_one(
             """
             insert into ai.embedding_jobs(tenant_id,document_id,status,model_name,output_dimensionality,started_at)
-            values (%s,%s,'running',%s,768,now()) returning *
+            values (%s,%s,'running',%s,%s,now()) returning *
             """,
-            (tenant_id, document_id, model_name),
+            (tenant_id, document_id, model_name, output_dimensions),
         )
         assert row is not None
         return row

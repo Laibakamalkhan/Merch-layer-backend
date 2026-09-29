@@ -113,6 +113,9 @@ class CommercePlatformService:
                 model=settings.gemini_model,
                 embedding_model=settings.gemini_embedding_model,
                 embedding_dimensions=settings.embedding_dimensions,
+                embedding_provider=settings.embedding_provider,
+                ollama_base_url=settings.ollama_base_url,
+                ollama_embedding_model=settings.ollama_embedding_model,
             )
             self.indexer = SemanticIndexer(self.db, self.gemini)
             self.analyst = AIAnalyst(self.db, self.gemini)

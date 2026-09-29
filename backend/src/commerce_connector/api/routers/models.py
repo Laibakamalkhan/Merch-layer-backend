@@ -23,6 +23,9 @@ def models(current_user: CurrentUser = Depends(get_current_user)):
                 "supports_files": True,
                 "supports_dashboards": True,
                 "available": bool(settings.gemini_api_key),
+                "embedding_provider": settings.embedding_provider,
+                "embedding_model": settings.ollama_embedding_model if settings.embedding_provider == "ollama" else settings.gemini_embedding_model,
+                "embedding_dimensions": settings.embedding_dimensions,
             }
         ],
     }

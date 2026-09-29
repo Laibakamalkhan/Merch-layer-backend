@@ -15,9 +15,12 @@ class PlatformSettings:
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
+    embedding_provider: str = "ollama"
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_embedding_model: str = "embeddinggemma:latest"
     bronze_bucket: str = "commerce-bronze"
     user_files_bucket: str = "commerce-files"
     max_user_file_bytes: int = 20 * 1024 * 1024
@@ -34,4 +37,6 @@ class PlatformSettings:
 
     def validate_ai(self) -> None:
         if not self.gemini_api_key.strip():
-            raise ValueError("Gemini API key is required for RAG / AI Analyst.")
+            raise ValueError("Gemini API key is required for AI Analyst text generation.")
+        if self.embedding_provider not in {"ollama", "gemini"}:
+            raise ValueError("EMBEDDING_PROVIDER must be 'ollama' or 'gemini'.")
