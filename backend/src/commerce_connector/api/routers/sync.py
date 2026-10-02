@@ -38,15 +38,17 @@ async def run_sync_background(payload: SyncRequest, current_user: CurrentUser = 
             tenant_id=tenant_id,
             connection_ids=connection_ids,
             rebuild_rag_after_sync=payload.rebuild_rag_after_sync,
-        )
+        ),
+        tenant_id=tenant_id,
+        user_id=current_user.id,
     )
     return {"task_id": state.id, "status": state.status}
 
 
 @router.get("/tasks/{task_id}")
-def get_task(task_id: str, current_user: CurrentUser = Depends(get_current_user)):
+def get_task(task_id: str, current_user: CurrentUser = Depends(get_current_user), service=Depends(get_service)):
     state = TASKS.get(task_id)
-    if not state:
+    if not state or not state.tenant_id or not service.db.is_tenant_member(state.tenant_id, current_user.id):
         raise HTTPException(status_code=404, detail="Task not found")
     return state
 
