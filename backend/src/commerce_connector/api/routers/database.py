@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from commerce_connector.api.deps import get_service
 from commerce_connector.api.schemas import TableQueryRequest
 from commerce_connector.api.table_registry import TABLE_SPECS, TableSpec, get_table_spec, grouped_table_specs
 
+logger = logging.getLogger("commerce_connector.api")
 router = APIRouter(prefix="/database", tags=["Database Tables"])
 
 
@@ -37,7 +39,10 @@ def _common_filters(
 def _translate_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail=str(exc))
-    return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.exception("Database query error: %s", exc)
+    return HTTPException(status_code=500, detail="Query failed")
 
 
 @router.get("/catalog")

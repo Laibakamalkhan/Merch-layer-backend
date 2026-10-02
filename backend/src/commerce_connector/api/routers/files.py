@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 
 from commerce_connector.api.auth import CurrentUser, get_current_user, require_tenant_access
 from commerce_connector.api.deps import get_service
 from commerce_connector.platform.user_files import extract_indexable_text
 
+logger = logging.getLogger("commerce_connector.api")
 router = APIRouter(prefix="/files", tags=["Files"])
 
 
@@ -34,6 +36,7 @@ def list_files(
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_file(
+    request: Request,
     tenant_id: UUID = Form(...),
     upload: UploadFile = File(...),
     current_user: CurrentUser = Depends(get_current_user),
@@ -42,11 +45,34 @@ async def upload_file(
     require_tenant_access(service, current_user.id, str(tenant_id))
     if not service.user_files:
         raise HTTPException(status_code=503, detail="Supabase Storage is not configured on the backend")
-    data = await upload.read()
+
+    cl_header = request.headers.get("content-length")
+    if cl_header and cl_header.isdigit():
+        if int(cl_header) > service.settings.max_user_file_bytes + 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {service.settings.max_user_file_bytes} byte limit",
+            )
+
+    chunk_size = 1024 * 1024
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > service.settings.max_user_file_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds {service.settings.max_user_file_bytes} byte limit",
+            )
+        chunks.append(chunk)
+
+    data = b"".join(chunks)
     if not data:
         raise HTTPException(status_code=400, detail="File is empty")
-    if len(data) > service.settings.max_user_file_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds {service.settings.max_user_file_bytes} byte limit")
+
     filename = _safe_name(upload.filename or "file")
     object_path = f"{tenant_id}/{current_user.id}/{uuid4()}/{filename}"
     try:
@@ -84,7 +110,8 @@ async def upload_file(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("File upload failed for tenant %s, user %s", tenant_id, current_user.id)
+        raise HTTPException(status_code=500, detail="File upload failed") from exc
 
 
 @router.get("/{file_id}")
