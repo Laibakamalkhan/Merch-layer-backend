@@ -45,6 +45,10 @@ build/
 
 # Test / coverage
 .pytest_cache/
+backend/.pytest_cache/
 .coverage
 htmlcov/
+
+# Archives
+*.zip
 
