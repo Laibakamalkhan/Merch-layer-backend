@@ -5,6 +5,7 @@ import {
   BarChart3, Layers, Database, ArrowRight, RefreshCw, Copy, CheckCircle2, FileText, Download
 } from 'lucide-react';
 import { api } from '../../lib/api';
+import { downloadCsv } from '../../lib/csv';
 import AnalyticsChart from './AnalyticsChart';
 import { useAuth } from '../../context/AuthContext';
 
@@ -90,20 +91,6 @@ function computeKpis(dashboard, rows) {
     v = Number(v);
     return { label: k.label || k.column, value: v.toLocaleString(undefined, { maximumFractionDigits: 2 }) };
   }).filter(Boolean);
-}
-
-function rowsToCsv(rows) {
-  if (!rows?.length) return '';
-  const cols = Object.keys(rows[0]);
-  const esc = (v) => `"${cell(v).replace(/"/g, '""')}"`;
-  return [cols.join(','), ...rows.map((r) => cols.map((c) => esc(r[c])).join(','))].join('\n');
-}
-
-function downloadCsv(rows) {
-  const url = URL.createObjectURL(new Blob([rowsToCsv(rows)], { type: 'text/csv' }));
-  const a = document.createElement('a');
-  a.href = url; a.download = 'merchlayer-export.csv'; a.click();
-  URL.revokeObjectURL(url);
 }
 
 export default function WorkspaceChat({ initialStore = 'Shopify', onLimitReached }) {
