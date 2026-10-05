@@ -2082,3 +2082,164 @@
 .ws-bar-track { width: 34px; height: 150px; display: flex; align-items: flex-end; border-radius: 6px; background: rgba(148, 163, 184, 0.08); overflow: hidden; }
 .ws-bar-fill { width: 100%; border-radius: 6px 6px 0 0; background: currentColor; opacity: 0.75; }
 .ws-bar-label { max-width: 80px; margin-top: 6px; font-size: 9px; opacity: 0.65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --------------------------------------------------------------------------
+   Toast Notifications & CSV Upload Feedback
+   -------------------------------------------------------------------------- */
+.ws-btn--loading {
+  opacity: 0.75;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.ws-toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.ws-toast {
+  pointer-events: auto;
+  min-width: 320px;
+  max-width: 440px;
+  background: #14151c;
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  animation: wsToastSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  backdrop-filter: blur(8px);
+}
+
+.ws-toast--success {
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), 0 0 20px rgba(16, 185, 129, 0.12);
+}
+
+.ws-toast--success .ws-toast__icon {
+  color: #10b981;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.ws-toast--error {
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), 0 0 20px rgba(239, 68, 68, 0.12);
+}
+
+.ws-toast--error .ws-toast__icon {
+  color: #ef4444;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.ws-toast__content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.ws-toast__title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #f3f4f6;
+  letter-spacing: -0.01em;
+}
+
+.ws-toast__msg {
+  font-size: 0.76rem;
+  color: #9ca3af;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.ws-toast__close {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  margin-left: 4px;
+}
+
+.ws-toast__close:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@keyframes wsToastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Empty Files State */
+.workspace-files-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 20px;
+  text-align: center;
+  background: #13141a;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  margin-top: 16px;
+}
+
+/* --------------------------------------------------------------------------
+   CSV Upload Pill for Chat Toolbar
+   -------------------------------------------------------------------------- */
+.ws-csv-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(37, 99, 235, 0.16);
+  border: 1px solid rgba(59, 130, 246, 0.38);
+  color: #93c5fd;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.ws-csv-upload-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #3b82f6;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.35);
+}
+
+.ws-csv-upload-btn--sm {
+  padding: 3px 9px;
+  font-size: 0.72rem;
+}
+
+.ws-csv-upload-btn:disabled,
+.ws-csv-upload-btn.ws-btn--loading {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+

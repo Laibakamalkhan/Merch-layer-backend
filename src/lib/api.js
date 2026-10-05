@@ -143,6 +143,12 @@ export const api = {
     f.append('upload', file);
     return request('/files/upload', { method: 'POST', form: f });
   },
+  uploadCSV: (tenant_id, file) => {
+    const f = new FormData();
+    f.append('tenant_id', tenant_id);
+    f.append('upload', file);
+    return request('/files/upload', { method: 'POST', form: f });
+  },
   deleteFile: (id, tenant_id) => request(`/files/${id}`, { method: 'DELETE', query: { tenant_id } }),
   subscription: (tenant_id) => request('/subscription', { query: { tenant_id } }),
 };

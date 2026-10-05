@@ -25,3 +25,26 @@ export function downloadCsv(rows, filename = 'merchlayer-export.csv') {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+export function validateCsvFile(file, maxBytes = 25 * 1024 * 1024) {
+  if (!file) {
+    return { valid: false, error: 'No file selected.' };
+  }
+  const name = file.name || '';
+  const isCsvExt = name.toLowerCase().endsWith('.csv');
+  const isCsvMime = file.type === 'text/csv' || file.type === 'application/vnd.ms-excel' || file.type === 'text/plain' || file.type === '';
+  
+  if (!isCsvExt && !isCsvMime) {
+    return { valid: false, error: 'Please select a valid CSV (.csv) file.' };
+  }
+  if (file.size === 0) {
+    return { valid: false, error: 'The selected CSV file is empty.' };
+  }
+  if (file.size > maxBytes) {
+    const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+    const limitMb = Math.round(maxBytes / (1024 * 1024));
+    return { valid: false, error: `File size (${sizeMb} MB) exceeds the ${limitMb} MB limit.` };
+  }
+  return { valid: true };
+}
+

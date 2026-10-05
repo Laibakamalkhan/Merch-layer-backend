@@ -1,31 +1,21 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FileText, Trash2, Upload } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { FileText, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
+import UploadCSVButton from './UploadCSVButton';
 
 const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`);
 
 export default function FilesTab() {
   const { tenantId } = useAuth();
   const [files, setFiles] = useState([]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const inputRef = useRef(null);
 
   const load = useCallback(() => {
-    api.files(tenantId).then((d) => setFiles(d.items)).catch((e) => setError(e.message));
+    if (!tenantId) return;
+    api.files(tenantId).then((d) => setFiles(d?.items || [])).catch((e) => setError(e.message));
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
-
-  const onPick = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setBusy(true); setError('');
-    try { await api.uploadFile(tenantId, file); load(); }
-    catch (err) { setError(err.message); }
-    finally { setBusy(false); }
-  };
 
   const remove = async (id) => {
     try { await api.deleteFile(id, tenantId); load(); } catch (err) { setError(err.message); }
@@ -36,18 +26,24 @@ export default function FilesTab() {
       <div className="workspace-connectors__header">
         <div>
           <h2 className="workspace-connectors__title">Your Files</h2>
-          <p className="workspace-connectors__subtitle">Upload CSV, PDF or text files so the AI can use them as context.</p>
+          <p className="workspace-connectors__subtitle">Upload CSV datasets, catalogs or orders so the AI can use them as context.</p>
         </div>
         <div className="workspace-connectors__actions">
-          <input ref={inputRef} type="file" hidden onChange={onPick} />
-          <button className="ws-btn ws-btn--primary" disabled={busy} onClick={() => inputRef.current?.click()}>
-            <Upload size={15} /><span>{busy ? 'Uploading…' : 'Upload file'}</span>
-          </button>
+          <UploadCSVButton onUploadSuccess={load} />
         </div>
       </div>
 
       {error && <p role="alert" style={{ color: '#F87171' }}>⚠ {error}</p>}
-      {files.length === 0 && !error && <p style={{ opacity: .7 }}>No files yet.</p>}
+      {files.length === 0 && !error && (
+        <div className="workspace-files-empty">
+          <FileText size={44} style={{ color: '#4b5563', marginBottom: 12 }} />
+          <p style={{ fontSize: '0.95rem', fontWeight: 600, color: '#e5e7eb', margin: '0 0 6px' }}>No files uploaded yet</p>
+          <p style={{ fontSize: '0.8rem', color: '#9ca3af', margin: '0 0 18px', maxWidth: 360, textAlign: 'center' }}>
+            Upload CSV datasets to enable AI-powered analytics, query generation, and reports.
+          </p>
+          <UploadCSVButton onUploadSuccess={load} />
+        </div>
+      )}
 
       {files.length > 0 && (
         <div className="workspace-files__table-wrap">

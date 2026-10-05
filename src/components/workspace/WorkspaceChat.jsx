@@ -7,6 +7,7 @@ import {
 import { api } from '../../lib/api';
 import { downloadCsv } from '../../lib/csv';
 import AnalyticsChart from './AnalyticsChart';
+import UploadCSVButton from './UploadCSVButton';
 import { useAuth } from '../../context/AuthContext';
 
 const STORES = [
@@ -196,14 +197,16 @@ export default function WorkspaceChat({ initialStore = 'Shopify', onLimitReached
             {/* Bottom toolbar inside input card */}
             <div className="ws-prompt-card__toolbar">
               <div className="ws-prompt-card__tools-left">
-                {/* Plus button */}
-                <button 
-                  className="ws-tool-btn ws-tool-btn--icon"
-                  title="Add store dataset, CSV or image"
-                  type="button"
-                >
-                  <Plus size={18} />
-                </button>
+                {/* Upload CSV button */}
+                <UploadCSVButton
+                  variant="pill"
+                  size="md"
+                  buttonText="Upload CSV"
+                  title="Upload CSV dataset for analysis"
+                  onUploadSuccess={(_res, file) => {
+                    setPromptText((prev) => (prev ? `${prev} (using ${file.name})` : `Analyze the uploaded dataset: ${file.name}`));
+                  }}
+                />
 
                 {/* Reasoning pill toggle */}
                 <button
@@ -541,9 +544,15 @@ export default function WorkspaceChat({ initialStore = 'Shopify', onLimitReached
               />
               <div className="ws-prompt-card__toolbar">
                 <div className="ws-prompt-card__tools-left">
-                  <button className="ws-tool-btn ws-tool-btn--icon" type="button">
-                    <Plus size={16} />
-                  </button>
+                  <UploadCSVButton
+                    variant="pill"
+                    size="sm"
+                    buttonText="Upload CSV"
+                    title="Upload CSV dataset for analysis"
+                    onUploadSuccess={(_res, file) => {
+                      setPromptText((prev) => (prev ? `${prev} (using ${file.name})` : `Analyze the uploaded dataset: ${file.name}`));
+                    }}
+                  />
                   <button
                     type="button"
                     className={`ws-reasoning-toggle ws-reasoning-toggle--sm ${isReasoningActive ? 'ws-reasoning-toggle--active' : ''}`}
