@@ -1,0 +1,33 @@
+table: silver.orders
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: source_id
+  order_number: order_number
+  financial_status: financial_status
+  fulfillment_status: fulfillment_status
+  currency_code: currency_code
+  subtotal_amount: subtotal_amount
+  discount_amount: discount_amount
+  shipping_amount: shipping_amount
+  tax_amount: tax_amount
+  gross_amount: gross_amount
+  total_amount: total_amount
+  refunded_amount: refunded_amount
+  net_amount: net_amount
+  source_created_at: source_created_at
+  source_updated_at: source_updated_at
+  processed_at: processed_at
+  source_hash: $context.record_hash
+defaults:
+  financial_status: paid
+  fulfillment_status: fulfilled
+  currency_code: USD
+  subtotal_amount: 0
+  discount_amount: 0
+  shipping_amount: 0
+  tax_amount: 0
+  gross_amount: 0
+  total_amount: 0
+  refunded_amount: 0
+  net_amount: 0

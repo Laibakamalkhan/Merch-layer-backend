@@ -54,6 +54,7 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
     TableSpec("ingestion", "checkpoints"),
     TableSpec("ingestion", "webhook_events", large_columns=("headers", "payload")),
     TableSpec("ingestion", "extraction_pages", large_columns=("response_metadata",)),
+    TableSpec("ingestion", "uploaded_datasets", large_columns=("profile_summary", "mapping_config", "quality_summary")),
 
     # Bronze
     TableSpec("bronze", "raw_objects", large_columns=("source_metadata",)),

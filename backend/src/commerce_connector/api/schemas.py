@@ -176,3 +176,31 @@ class ConversationMessageCreate(BaseModel):
     reasoning: bool = False
     model_id: str = Field(default="merchlayer-2.0", max_length=100)
     file_ids: list[UUID] = Field(default_factory=list, max_length=20)
+
+
+class DatasetIngestRequest(BaseModel):
+    tenant_id: UUID
+    target_entity: Literal["orders", "order_items", "products", "customers"]
+    column_mappings: dict[str, str] = Field(min_length=1, description="Map source headers to canonical field names")
+    natural_key_column: str | None = Field(default=None, description="Source column to use as unique natural identifier")
+    rebuild_rag_after_sync: bool = False
+
+
+class DatasetItemResponse(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    connection_id: UUID | None = None
+    filename: str
+    file_type: str
+    byte_size: int
+    checksum_sha256: str
+    status: str
+    has_validation_errors: bool = False
+    detected_entity: str | None = None
+    profile_summary: dict[str, Any] = Field(default_factory=dict)
+    mapping_config: dict[str, Any] = Field(default_factory=dict)
+    quality_summary: dict[str, Any] = Field(default_factory=dict)
+    row_count: int = 0
+    error_message: str | None = None
+    created_at: Any
+    updated_at: Any

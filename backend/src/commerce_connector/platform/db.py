@@ -1923,3 +1923,163 @@ class PostgresGateway:
                 items.append({"type": "dashboard", "id": row["id"], "title": row.get("title"), "created_at": row.get("created_at"), "updated_at": row.get("created_at"), "metadata": {"status": row.get("status")}})
         items.sort(key=lambda x: str(x.get("updated_at") or x.get("created_at") or ""), reverse=True)
         return items[:limit]
+
+    # ------------------------------------------------------------------
+    # Uploaded Datasets
+    # ------------------------------------------------------------------
+    def create_uploaded_dataset(
+        self,
+        *,
+        tenant_id: str | UUID,
+        created_by: str | UUID | None,
+        filename: str,
+        file_type: str,
+        storage_path: str,
+        byte_size: int,
+        checksum_sha256: str,
+    ) -> dict[str, Any]:
+        row = self.fetch_one(
+            """
+            insert into ingestion.uploaded_datasets(
+                tenant_id, created_by, filename, file_type, storage_path,
+                byte_size, checksum_sha256, status
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, 'uploaded')
+            returning *
+            """,
+            (tenant_id, created_by, filename, file_type, storage_path, byte_size, checksum_sha256),
+        )
+        assert row is not None
+        return row
+
+    def get_uploaded_dataset(self, dataset_id: str | UUID, tenant_id: str | UUID) -> dict[str, Any] | None:
+        return self.fetch_one(
+            "select * from ingestion.uploaded_datasets where id = %s and tenant_id = %s",
+            (dataset_id, tenant_id),
+        )
+
+    def list_uploaded_datasets(
+        self,
+        tenant_id: str | UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return self.fetch_all(
+            """
+            select * from ingestion.uploaded_datasets
+            where tenant_id = %s
+            order by created_at desc
+            limit %s offset %s
+            """,
+            (tenant_id, max(1, min(limit, 200)), max(0, offset)),
+        )
+
+    def update_dataset_profile(
+        self,
+        dataset_id: str | UUID,
+        tenant_id: str | UUID,
+        *,
+        status: str,
+        has_validation_errors: bool,
+        detected_entity: str | None = None,
+        profile_summary: dict[str, Any] | None = None,
+        quality_summary: dict[str, Any] | None = None,
+        row_count: int = 0,
+        error_message: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.fetch_one(
+            """
+            update ingestion.uploaded_datasets
+            set status = %s,
+                has_validation_errors = %s,
+                detected_entity = coalesce(%s, detected_entity),
+                profile_summary = coalesce(%s::jsonb, profile_summary),
+                quality_summary = coalesce(%s::jsonb, quality_summary),
+                row_count = %s,
+                error_message = %s,
+                updated_at = now()
+            where id = %s and tenant_id = %s
+            returning *
+            """,
+            (
+                status,
+                has_validation_errors,
+                detected_entity,
+                json.dumps(profile_summary or {}) if profile_summary is not None else None,
+                json.dumps(quality_summary or {}) if quality_summary is not None else None,
+                row_count,
+                error_message,
+                dataset_id,
+                tenant_id,
+            ),
+        )
+
+    def update_dataset_status(
+        self,
+        dataset_id: str | UUID,
+        tenant_id: str | UUID,
+        *,
+        status: str,
+        connection_id: str | UUID | None = None,
+        mapping_config: dict[str, Any] | None = None,
+        quality_summary: dict[str, Any] | None = None,
+        row_count: int | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any] | None:
+        sets = ["status = %s", "updated_at = now()"]
+        params: list[Any] = [status]
+        if connection_id is not None:
+            sets.append("connection_id = %s")
+            params.append(connection_id)
+        if mapping_config is not None:
+            sets.append("mapping_config = %s::jsonb")
+            params.append(json.dumps(mapping_config))
+        if quality_summary is not None:
+            sets.append("quality_summary = %s::jsonb")
+            params.append(json.dumps(quality_summary))
+        if row_count is not None:
+            sets.append("row_count = %s")
+            params.append(row_count)
+        if error_message is not None:
+            sets.append("error_message = %s")
+            params.append(error_message)
+
+        params.extend([dataset_id, tenant_id])
+        return self.fetch_one(
+            f"update ingestion.uploaded_datasets set {', '.join(sets)} where id = %s and tenant_id = %s returning *",
+            params,
+        )
+
+    def purge_connection_silver_records(self, connection_id: str | UUID) -> None:
+        with self.connection() as conn, conn.cursor() as cur:
+            for table in (
+                "silver.order_items",
+                "silver.orders",
+                "silver.product_variants",
+                "silver.products",
+                "silver.customers",
+                "silver.inventory_levels",
+                "silver.refund_items",
+                "silver.refunds",
+                "silver.fulfillment_items",
+                "silver.fulfillments",
+            ):
+                cur.execute(f"delete from {table} where connection_id = %s", (connection_id,))
+
+    def prune_stale_silver_records(
+        self,
+        table: str,
+        connection_id: str | UUID,
+        active_source_ids: Sequence[str],
+    ) -> int:
+        if not re.fullmatch(r"silver\.[a-z_][a-z0-9_]*", table):
+            raise ValueError(f"Unsafe table name: {table}")
+        if not active_source_ids:
+            return 0
+        with self.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"delete from {table} where connection_id = %s and not (source_id = any(%s::text[]))",
+                (connection_id, list(active_source_ids)),
+            )
+            return cur.rowcount

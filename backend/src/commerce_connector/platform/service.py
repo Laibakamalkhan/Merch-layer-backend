@@ -11,8 +11,9 @@ from commerce_connector.core.connector import UniversalCommerceConnector
 from commerce_connector.platform.ai_analyst import AIAnalyst
 from commerce_connector.platform.bronze import BronzeWriter
 from commerce_connector.platform.db import PostgresGateway
-from commerce_connector.platform.groq import GroqClient
+from commerce_connector.platform.datasets.ingestor import DatasetIngestionOrchestrator
 from commerce_connector.platform.gold import GoldRefresher
+from commerce_connector.platform.groq import GroqClient
 from commerce_connector.platform.manifest_runtime import RuntimeManifestFactory
 from commerce_connector.platform.orchestrator import SyncOrchestrator
 from commerce_connector.platform.rag import SemanticIndexer
@@ -103,6 +104,12 @@ class CommercePlatformService:
             gold=self.gold,
             max_concurrency=settings.max_concurrent_connections,
             max_pages_per_resource=settings.max_pages_per_resource,
+        )
+        self.datasets_engine = DatasetIngestionOrchestrator(
+            db=self.db,
+            bronze=self.bronze,
+            silver=self.silver,
+            gold=self.gold,
         )
         self.llm = None
         self.indexer = None

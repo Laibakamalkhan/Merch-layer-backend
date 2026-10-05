@@ -9,7 +9,7 @@ EXPECTED_TABLES = {
     "control.platforms", "control.platform_versions", "control.platform_resources",
     "control.connections", "control.connection_credentials", "control.connection_resources", "control.sync_schedules",
     "ingestion.sync_jobs", "ingestion.sync_job_connections", "ingestion.sync_runs", "ingestion.pipeline_stage_runs",
-    "ingestion.checkpoints", "ingestion.webhook_events", "ingestion.extraction_pages",
+    "ingestion.checkpoints", "ingestion.webhook_events", "ingestion.extraction_pages", "ingestion.uploaded_datasets",
     "bronze.raw_objects", "bronze.records", "bronze.schema_snapshots",
     "silver.customers", "silver.customer_addresses", "silver.products", "silver.product_variants",
     "silver.categories", "silver.product_categories", "silver.locations", "silver.inventory_levels",
@@ -24,7 +24,7 @@ EXPECTED_TABLES = {
 
 
 def test_registry_covers_all_final_database_tables():
-    assert len(TABLE_SPECS) == 62
+    assert len(TABLE_SPECS) == 63
     assert {spec.key for spec in TABLE_SPECS} == EXPECTED_TABLES
 
 

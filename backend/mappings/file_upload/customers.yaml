@@ -1,0 +1,18 @@
+table: silver.customers
+conflict_columns: [connection_id, source_id]
+required: [source_id]
+fields:
+  source_id: source_id
+  email: email
+  phone: phone
+  first_name: first_name
+  last_name: last_name
+  display_name: display_name
+  orders_count: orders_count
+  total_spent: total_spent
+  source_created_at: source_created_at
+  source_updated_at: source_updated_at
+  source_hash: $context.record_hash
+defaults:
+  orders_count: 1
+  total_spent: 0

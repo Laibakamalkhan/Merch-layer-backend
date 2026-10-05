@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from commerce_connector.api.config import APISettings
-from commerce_connector.api.routers import ai, analytics, auth, connections, conversations, dashboards, data, database, files, health, library, me, models, ops, platforms, prompts, subscription, sync, tasks, tenants, usage
+from commerce_connector.api.routers import ai, analytics, auth, connections, conversations, dashboards, data, database, datasets, files, health, library, me, models, ops, platforms, prompts, subscription, sync, tasks, tenants, usage
 
 
 def create_app() -> FastAPI:
@@ -57,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(usage.router, prefix=api)
     app.include_router(library.router, prefix=api)
     app.include_router(files.router, prefix=api)
+    app.include_router(datasets.router, prefix=api)
     app.include_router(models.router, prefix=api)
     app.include_router(subscription.router, prefix=api)
     app.include_router(tenants.router, prefix=api)
