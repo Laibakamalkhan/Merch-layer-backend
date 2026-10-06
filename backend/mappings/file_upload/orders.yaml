@@ -4,6 +4,8 @@ required: [source_id]
 fields:
   source_id: source_id
   order_number: order_number
+  status: status
+  sales_channel: sales_channel
   financial_status: financial_status
   fulfillment_status: fulfillment_status
   currency_code: currency_code

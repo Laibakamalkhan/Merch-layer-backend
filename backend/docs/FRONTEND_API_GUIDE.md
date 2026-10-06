@@ -1,4 +1,4 @@
-# Frontend API Guide — Merchlayer / Universal Commerce (V6)
+# Frontend API Guide
 
 Base URL (local): `http://localhost:8000`  ·  Prefix: `/api/v1`  ·  Interactive docs: `/docs` (Swagger)
 
@@ -113,3 +113,117 @@ AI answers need data. A brand-new workspace has none. Order of setup (backend/ad
 ## 8. CORS
 
 Backend allows `http://localhost:3000` by default. For another frontend URL set `CORS_ORIGINS` in the backend `.env` (comma separated) and restart.
+
+## 9. Frontend Tables (read-only)
+
+Table data for **orders**, **products** and **customers** from the Silver layer. Rows from API stores (Shopify, WooCommerce, Amazon) and uploaded files (CSV/XLSX/JSON) appear together; `source_type` (`api` | `file`) tells them apart. Both routes need `Authorization: Bearer <token>` and a `tenant_id` the user belongs to (otherwise **403**).
+
+### 9.1 `GET /api/v1/tables/sources?tenant_id=`
+
+Returns one item per connection (newest first), for a source filter dropdown.
+
+```json
+{
+  "items": [
+    {
+      "connection_id": "7f1c0f0e-1111-4c1a-9d55-0a1b2c3d4e5f",
+      "name": "My Shopify Store",
+      "platform_code": "shopify",
+      "platform_name": "Shopify",
+      "source_type": "api",
+      "status": "active",
+      "last_synced_at": "2026-10-05T09:30:00Z",
+      "dataset": null,
+      "counts": {"orders": 120, "products": 45, "customers": 80}
+    },
+    {
+      "connection_id": "2b9d7a10-2222-4f3b-8c66-1a2b3c4d5e6f",
+      "name": "sales_oct.csv",
+      "platform_code": "file_upload",
+      "platform_name": "File Upload",
+      "source_type": "file",
+      "status": "active",
+      "last_synced_at": null,
+      "dataset": {
+        "id": "c3e5...", "filename": "sales_oct.csv", "file_type": "csv",
+        "status": "completed", "row_count": 300, "created_at": "2026-10-04T12:00:00Z"
+      },
+      "counts": {"orders": 300, "products": 0, "customers": 0}
+    }
+  ]
+}
+```
+
+`dataset` is `null` for API sources. Secrets, config and credentials are never returned.
+
+### 9.2 `GET /api/v1/tables/{entity}`
+
+`entity` = `orders` | `products` | `customers` (anything else -> 422).
+
+| Param | Type | Notes |
+|---|---|---|
+| `tenant_id` | UUID | **required** |
+| `connection_id` | UUID | optional; must belong to the tenant, else **404** |
+| `source_type` | `api` \| `file` | optional |
+| `search` | string (max 100) | case-insensitive; `%`, `_` and `\` are treated as normal characters |
+| `status` | string (max 50) | normalized lowercase, e.g. `paid`, `active` |
+| `fulfillment_status` | string (max 50) | **orders only** |
+| `date_from`, `date_to` | `YYYY-MM-DD` | **orders only**; `date_to` is inclusive; `date_from` after `date_to` -> 400 |
+| `sort_by` | string | must be a `sortable` column key of that entity, else **400** |
+| `sort_dir` | `asc` \| `desc` | default `desc`; other value -> 422 |
+| `limit` | int 1..200 | default 50 (0 or 201 -> 422) |
+| `offset` | int >= 0 | default 0 |
+
+**Searchable fields:** orders = `order_number`, `source_id`; products = `title`, `vendor`, `handle`; customers = `display_name`, `first_name`, `last_name`, `email`, `phone`.
+
+**Default sort:** orders `order_date`, products `product_date`, customers `customer_since` (all newest first). Nulls are always last; ties are broken by row id so pages never overlap.
+
+**Columns** (use the `columns` array in the response to build the table header):
+
+| Entity | Column keys |
+|---|---|
+| orders | `order_number`, `source_name`, `source`, `sales_channel`, `status`, `fulfillment_status`, `total_amount` (money), `net_amount` (money), `order_date` |
+| products | `title`, `vendor`, `product_type`, `status`, `source_name`, `source`, `product_date` |
+| customers | `name`, `email`, `phone`, `orders_count`, `total_spent` (plain number, no currency), `source_name`, `source`, `customer_since` |
+
+Column `type` is one of `text`, `status`, `money`, `datetime`, `number`. A `money` column has `currency_key` (name of the item field holding the currency, e.g. `currency_code`). **Never add up money across different currencies.**
+
+**Extra item fields (not columns):** all entities: `id`, `connection_id`, `source_type`; orders: `currency_code`, `source_order_id`, `refunded_amount`; products: `source_product_id`. The same order can appear under two connections if the same store was connected twice - use `connection_id` / `source_name` to tell them apart. Missing values are `null` (for example WooCommerce products have no vendor).
+
+**Pagination:** `total` is the number of rows matching the filters (also correct for an empty page). `has_more` = `offset + items.length < total`. Next page: `offset += limit`.
+
+**Errors:** 400 invalid `sort_by` / date range, 401 no token, 403 not a workspace member, 404 unknown connection for this tenant, 422 invalid parameter, 500 `{"detail": "Query failed"}`.
+
+**Example:** `GET /api/v1/tables/orders?tenant_id=...&search=10&sort_by=total_amount&sort_dir=desc&limit=2`
+
+```json
+{
+  "entity": "orders",
+  "columns": [
+    {"key": "order_number", "label": "Order", "type": "text", "sortable": true},
+    {"key": "source_name", "label": "Store / File", "type": "text", "sortable": true},
+    {"key": "source", "label": "Platform", "type": "text", "sortable": false},
+    {"key": "sales_channel", "label": "Channel", "type": "text", "sortable": false},
+    {"key": "status", "label": "Status", "type": "status", "sortable": true},
+    {"key": "fulfillment_status", "label": "Fulfillment", "type": "status", "sortable": true},
+    {"key": "total_amount", "label": "Total", "type": "money", "sortable": true, "currency_key": "currency_code"},
+    {"key": "net_amount", "label": "Net", "type": "money", "sortable": false, "currency_key": "currency_code"},
+    {"key": "order_date", "label": "Order Date", "type": "datetime", "sortable": true}
+  ],
+  "items": [
+    {
+      "order_number": "#1010", "source_name": "My Shopify Store", "source": "Shopify",
+      "sales_channel": null, "status": "paid", "fulfillment_status": "unfulfilled",
+      "total_amount": "249.90", "net_amount": "249.90", "order_date": "2026-10-03T14:21:00Z",
+      "id": "a1b2c3d4-0000-4000-8000-000000000001",
+      "connection_id": "7f1c0f0e-1111-4c1a-9d55-0a1b2c3d4e5f",
+      "currency_code": "USD", "source_type": "api",
+      "source_order_id": "gid://shopify/Order/1010", "refunded_amount": "0.00"
+    }
+  ],
+  "total": 37,
+  "limit": 2,
+  "offset": 0,
+  "has_more": true
+}
+```

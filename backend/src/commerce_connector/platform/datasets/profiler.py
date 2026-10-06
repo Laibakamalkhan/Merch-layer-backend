@@ -18,6 +18,8 @@ CANONICAL_SYNONYMS = {
         "currency_code": {"currency", "currency_code", "currencycode", "curr"},
         "financial_status": {"financial_status", "payment_status", "status", "paid_status"},
         "fulfillment_status": {"fulfillment_status", "shipping_status", "delivery_status"},
+        "status": {"status", "order_status"},
+        "sales_channel": {"sales_channel", "channel", "source_channel", "sale_channel"},
         "source_created_at": {"date", "order_date", "orderdate", "created_at", "createdat", "timestamp", "purchase_date", "datetime"},
         "processed_at": {"processed_at", "processedat", "paid_at", "fulfillment_date"},
     },
