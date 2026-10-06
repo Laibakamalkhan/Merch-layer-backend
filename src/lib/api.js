@@ -151,4 +151,61 @@ export const api = {
   },
   deleteFile: (id, tenant_id) => request(`/files/${id}`, { method: 'DELETE', query: { tenant_id } }),
   subscription: (tenant_id) => request('/subscription', { query: { tenant_id } }),
+  // tables
+  tableSources: async (tenant_id) => {
+    try {
+      return await request('/tables/sources', { query: { tenant_id } });
+    } catch (err) {
+      if (err.status === 404) {
+        // Fallback to tenant connections
+        const conns = await request('/connections', { query: { tenant_id } }).catch(() => ({ items: [] }));
+        return {
+          sources: (conns?.items || []).map((c) => ({
+            id: c.id,
+            name: c.name || c.platform_name || c.platform_code,
+            code: c.platform_code,
+          })),
+        };
+      }
+      throw err;
+    }
+  },
+  tableData: async (entity, params = {}) => {
+    try {
+      return await request(`/tables/${entity}`, { query: params });
+    } catch (err) {
+      if (err.status === 404) {
+        // Fallback to /database/silver/{entity} or /data/silver/{entity}
+        const { tenant_id, page = 1, limit = 25, offset, source, connection_id } = params;
+        const calcOffset = offset !== undefined ? offset : (page - 1) * limit;
+        const conn = connection_id || (source && source !== 'all' ? source : undefined);
+
+        try {
+          return await request(`/database/silver/${entity}`, {
+            query: {
+              tenant_id,
+              limit,
+              offset: calcOffset,
+              connection_id: conn,
+            },
+          });
+        } catch (dbErr) {
+          if (dbErr.status === 404) {
+            return await request(`/data/silver/${entity}`, {
+              query: {
+                tenant_id,
+                limit,
+                offset: calcOffset,
+                connection_id: conn,
+              },
+            });
+          }
+          throw dbErr;
+        }
+      }
+      throw err;
+    }
+  },
 };
+
+
