@@ -296,8 +296,11 @@ export const footerLinks = [
   {
     category: 'Legal',
     links: [
-      { label: 'Privacy', href: '#privacy' },
-      { label: 'Terms', href: '#terms' },
+      { label: 'Terms of Service', href: '/terms' },
+      { label: 'Privacy Policy', href: '/privacy' },
+      { label: 'Data Processing Agreement', href: '/dpa' },
+      { label: 'Cookie Policy', href: '/cookies' },
+      { label: 'Data Retention & Deletion', href: '/data-retention' },
     ],
   },
 ];
