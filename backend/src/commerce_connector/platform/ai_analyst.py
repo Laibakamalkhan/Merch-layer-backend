@@ -9,6 +9,13 @@ from commerce_connector.platform.analytics.metric_resolver import (
     enforce_verified_metric_sql,
     resolve_metrics,
 )
+from commerce_connector.platform.analytics.dashboard_builder import (
+    build_verified_dashboard,
+    compact_verified_payload,
+)
+from commerce_connector.platform.analytics.visualization import (
+    recommend_visualizations,
+)
 from commerce_connector.platform.analytics.result_validator import (
     validate_query_result,
 )
@@ -101,7 +108,7 @@ The required JSON structure is:
       {
         "label": "string",
         "column": "string",
-        "aggregation": "sum|avg|max|min|value"
+        "aggregation": "value"
       }
     ],
     "charts": [
@@ -131,9 +138,12 @@ Rules:
 - Do not recalculate numeric values.
 - Do not describe any number that is absent from the database result.
 - Only reference columns actually present in the database result.
+- Choose chart types only from the allowed visualization candidates supplied in the user prompt.
+- Never use pie, donut, scatter, map, or other types the frontend cannot render.
+- Backend visualization rules are authoritative if they conflict with a preferred chart type.
+- Dashboard numeric values are filled by the backend from the executed query. Do not put numbers on KPIs or charts.
 - For a one-row aggregate result, KPI aggregation MUST be "value" because PostgreSQL has already performed the aggregation.
-- For multi-row results, use an aggregation only when it intentionally summarizes those rows.
-- If the database result is empty, explain that no matching data was returned.
+- If the database result is empty, explain that no matching data was returned. Do not invent zeros.
 """
 
 
@@ -617,6 +627,7 @@ class AIAnalyst:
                 )
 
             rows = verified.as_dicts()
+            viz = recommend_visualizations(verified, intent=intent)
 
             self.db.save_generated_query(
                 tenant_id=tenant_id,
@@ -646,15 +657,17 @@ class AIAnalyst:
                 "Executed SQL:\n"
                 f"{sql}\n\n"
                 f"{shape_note}\n\n"
-                "Database result JSON:\n"
-                f"{json.dumps(rows[:200], allow_nan=False)}"
+                "Verified database result (authoritative; do not recalculate):\n"
+                f"{json.dumps(compact_verified_payload(verified), allow_nan=False)}"
                 f"{files_text}\n\n"
                 "IMPORTANT:\n"
                 "- The database result is authoritative.\n"
                 "- Do not invent or calculate any number.\n"
                 "- Only reference columns present in the database result.\n"
+                "- Dashboard KPI/chart numbers will be copied by the backend.\n"
                 "- If this is a one-row aggregate result, use KPI aggregation "
                 '"value".\n'
+                f"- {viz.prompt_text()}\n"
                 "- Return exactly one JSON object matching the supplied schema.\n"
                 "- Do not return an empty response.\n"
                 "- Do not return markdown."
@@ -672,6 +685,10 @@ class AIAnalyst:
             dashboard = _normalise_dashboard(
                 final.get("dashboard"),
                 rows,
+                intent=intent,
+                verified=verified,
+                metrics=resolution.matched,
+                title=str(plan.get("title") or "AI Analytics"),
             )
 
             title = str(
@@ -777,154 +794,22 @@ class AIAnalyst:
 def _normalise_dashboard(
     dashboard: Any,
     rows: list[dict[str, Any]],
+    *,
+    intent: dict[str, Any] | None = None,
+    verified: Any | None = None,
+    metrics: list[Any] | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
-    """Keep the LLM dashboard spec strictly aligned with returned SQL columns.
+    """Materialise a canonical dashboard from executed query rows.
 
-    SQL is the source of truth. A dashboard field that points at a column that
-    was not returned by the query is removed/neutralised instead of allowing
-    the frontend to manufacture a value.
-
-    PostgreSQL has already performed aggregation for one-row aggregate queries,
-    so a one-row KPI must be displayed as its value rather than summed again.
+    The LLM may supply labels and layout. Numeric KPI/chart values are copied
+    from PostgreSQL results and are never recalculated here.
     """
 
-    raw = (
-        dashboard
-        if isinstance(dashboard, dict)
-        else {}
+    return build_verified_dashboard(
+        verified if verified is not None else rows,
+        title=title,
+        llm_dashboard=dashboard if isinstance(dashboard, dict) else {},
+        intent=intent,
+        metrics=metrics,
     )
-
-    available = (
-        set(rows[0].keys())
-        if rows
-        else set()
-    )
-
-    title = str(
-        raw.get("title")
-        or "AI Analytics"
-    )
-
-    kpis: list[dict[str, Any]] = []
-
-    for item in raw.get("kpis") or []:
-        if not isinstance(item, dict):
-            continue
-
-        column = item.get("column")
-
-        if (
-            not isinstance(column, str)
-            or column not in available
-        ):
-            continue
-
-        aggregation = str(
-            item.get("aggregation")
-            or "value"
-        ).lower()
-
-        if aggregation not in {
-            "sum",
-            "avg",
-            "max",
-            "min",
-            "value",
-        }:
-            aggregation = "value"
-
-        if len(rows) == 1:
-            aggregation = "value"
-
-        kpis.append(
-            {
-                "label": str(
-                    item.get("label")
-                    or column
-                ),
-                "column": column,
-                "aggregation": aggregation,
-            }
-        )
-
-    charts: list[dict[str, Any]] = []
-
-    for item in raw.get("charts") or []:
-        if not isinstance(item, dict):
-            continue
-
-        chart_type = str(
-            item.get("type")
-            or "table"
-        ).lower()
-
-        if chart_type not in {
-            "line",
-            "bar",
-            "area",
-            "table",
-        }:
-            chart_type = "table"
-
-        x = item.get("x")
-        y = item.get("y")
-        series = item.get("series")
-
-        charts.append(
-            {
-                "type": chart_type,
-                "title": str(
-                    item.get("title")
-                    or "Chart"
-                ),
-                "x": (
-                    x
-                    if isinstance(x, str)
-                    and x in available
-                    else None
-                ),
-                "y": (
-                    y
-                    if isinstance(y, str)
-                    and y in available
-                    else None
-                ),
-                "series": (
-                    series
-                    if isinstance(series, str)
-                    and series in available
-                    else None
-                ),
-            }
-        )
-
-    filters: list[dict[str, Any]] = []
-
-    for item in raw.get("filters") or []:
-        if not isinstance(item, dict):
-            continue
-
-        field = item.get("field")
-        filter_type = item.get("type")
-
-        if (
-            isinstance(field, str)
-            and field in available
-            and filter_type in {
-                "date_range",
-                "select",
-            }
-        ):
-            filters.append(
-                {
-                    "field": field,
-                    "type": filter_type,
-                }
-            )
-
-    return {
-        "title": title,
-        "kpis": kpis,
-        "charts": charts,
-        "filters": filters,
-    }
