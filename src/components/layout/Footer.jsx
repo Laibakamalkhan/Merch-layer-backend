@@ -2,15 +2,39 @@ import React from 'react';
 import { footerLinks } from '../../data/siteData';
 import './Footer.css';
 
-export default function Footer() {
+export default function Footer({ onNavigate, onOpenWorkspace }) {
   const currentYear = new Date().getFullYear();
+
+  const handleLinkClick = (e, href) => {
+    if (href === '#workspace' || href === '#app') {
+      if (onOpenWorkspace) {
+        e.preventDefault();
+        onOpenWorkspace();
+        return;
+      }
+    }
+
+    if (onNavigate) {
+      if (href.startsWith('/') || href.startsWith('#')) {
+        e.preventDefault();
+        onNavigate(href);
+      }
+    }
+  };
+
+  const handleHomeClick = (e) => {
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate('/');
+    }
+  };
 
   return (
     <footer className="footer" role="contentinfo">
       <div className="footer__main container">
         {/* Brand column */}
         <div className="footer__brand">
-          <a href="#" className="footer__logo" aria-label="Merchlayer home">
+          <a href="/" className="footer__logo" aria-label="Merchlayer home" onClick={handleHomeClick}>
             <div className="footer__logo-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <rect x="1" y="1" width="6.5" height="6.5" rx="1.5" fill="#3B82F6"/>
@@ -36,7 +60,13 @@ export default function Footer() {
             <ul className="footer__col-links">
               {col.links.map((link) => (
                 <li key={link.label}>
-                  <a href={link.href} className="footer__link">{link.label}</a>
+                  <a
+                    href={link.href}
+                    className="footer__link"
+                    onClick={(e) => handleLinkClick(e, link.href)}
+                  >
+                    {link.label}
+                  </a>
                 </li>
               ))}
             </ul>

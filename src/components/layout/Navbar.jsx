@@ -3,7 +3,7 @@ import { navLinks, productDropdown, developerDropdown } from '../../data/siteDat
 import Button from '../ui/Button';
 import './Navbar.css';
 
-function DropdownMenu({ items, isOpen }) {
+function DropdownMenu({ items, isOpen, onItemClick }) {
   return (
     <div className={`nav-dropdown ${isOpen ? 'nav-dropdown--open' : ''}`} role="menu">
       {items.map((item) => (
@@ -12,6 +12,11 @@ function DropdownMenu({ items, isOpen }) {
           href={item.href}
           className="nav-dropdown__item"
           role="menuitem"
+          onClick={(e) => {
+            if (onItemClick) {
+              onItemClick(e, item.href);
+            }
+          }}
         >
           <span className="nav-dropdown__item-label">{item.label}</span>
           {item.description && (
@@ -23,7 +28,7 @@ function DropdownMenu({ items, isOpen }) {
   );
 }
 
-function NavLink({ link, onClick }) {
+function NavLink({ link, onClick, onItemClick }) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const ref = useRef(null);
 
@@ -44,7 +49,13 @@ function NavLink({ link, onClick }) {
 
   if (!link.hasDropdown) {
     return (
-      <a href={link.href} className="nav-link" onClick={onClick}>
+      <a
+        href={link.href}
+        className="nav-link"
+        onClick={(e) => {
+          if (onClick) onClick(e, link.href);
+        }}
+      >
         {link.label}
       </a>
     );
@@ -66,12 +77,21 @@ function NavLink({ link, onClick }) {
           <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {dropdownItems && <DropdownMenu items={dropdownItems} isOpen={dropdownOpen} />}
+      {dropdownItems && (
+        <DropdownMenu
+          items={dropdownItems}
+          isOpen={dropdownOpen}
+          onItemClick={(e, href) => {
+            setDropdownOpen(false);
+            if (onItemClick) onItemClick(e, href);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-export default function Navbar({ onOpenWorkspace }) {
+export default function Navbar({ onOpenWorkspace, onNavigate }) {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -103,11 +123,25 @@ export default function Navbar({ onOpenWorkspace }) {
     }
   };
 
+  const handleNavClick = (e, href) => {
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate(href);
+    }
+  };
+
+  const handleLogoClick = (e) => {
+    if (onNavigate) {
+      e.preventDefault();
+      onNavigate('/');
+    }
+  };
+
   return (
     <header className={`navbar ${scrolled ? 'navbar--scrolled' : ''}`} role="banner">
       <div className="navbar__inner container">
         {/* Logo */}
-        <a href="#" className="navbar__logo" aria-label="Merchlayer home">
+        <a href="/" className="navbar__logo" aria-label="Merchlayer home" onClick={handleLogoClick}>
           <div className="navbar__logo-icon" aria-hidden="true">
             <svg width="20" height="20" viewBox="0 0 18 18" fill="none">
               <rect x="1" y="1" width="6.5" height="6.5" rx="1.5" fill="#3B82F6"/>
@@ -124,7 +158,12 @@ export default function Navbar({ onOpenWorkspace }) {
         {/* Desktop nav */}
         <nav className="navbar__nav" role="navigation" aria-label="Main navigation">
           {navLinks.map((link) => (
-            <NavLink key={link.label} link={link} />
+            <NavLink
+              key={link.label}
+              link={link}
+              onClick={handleNavClick}
+              onItemClick={handleNavClick}
+            />
           ))}
           <button 
             type="button" 
@@ -198,7 +237,10 @@ export default function Navbar({ onOpenWorkspace }) {
               key={link.label}
               href={link.href}
               className="mobile-menu__link"
-              onClick={() => setMobileOpen(false)}
+              onClick={(e) => {
+                setMobileOpen(false);
+                handleNavClick(e, link.href);
+              }}
             >
               {link.label}
             </a>
