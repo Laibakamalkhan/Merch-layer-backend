@@ -99,6 +99,7 @@ def send_message(id: UUID, payload: ConversationMessageCreate, current_user: Cur
         reasoning=payload.reasoning,
         model_id=payload.model_id,
         file_ids=payload.file_ids,
+        include_debug=payload.include_debug,
     )
 
 
@@ -117,6 +118,7 @@ async def stream_message(id: UUID, payload: ConversationMessageCreate, current_u
             reasoning=payload.reasoning,
             model_id=payload.model_id,
             file_ids=payload.file_ids,
+            include_debug=payload.include_debug,
         ),
         media_type="text/event-stream",
         headers=SSE_HEADERS,

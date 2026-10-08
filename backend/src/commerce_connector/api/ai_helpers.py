@@ -74,6 +74,41 @@ def enforce_ai_limit(service: Any, tenant_id: UUID) -> None:
         raise HTTPException(status_code=402, detail="Free plan AI query limit reached")
 
 
+def _call_service_ask_ai(
+    service: Any,
+    *,
+    tenant_id: UUID,
+    question: str,
+    user_id: str,
+    conversation_id: UUID | None,
+    reasoning: bool,
+    model_id: str,
+    file_ids: list[UUID],
+    include_debug: bool = False,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "user_id": user_id,
+        "conversation_id": str(conversation_id) if conversation_id else None,
+        "reasoning": reasoning,
+        "model_id": model_id,
+        "file_ids": [str(x) for x in file_ids],
+    }
+    import inspect
+    supports_debug = False
+    try:
+        sig = inspect.signature(service.ask_ai)
+        supports_debug = "include_debug" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (ValueError, TypeError):
+        supports_debug = True
+
+    if supports_debug:
+        kwargs["include_debug"] = bool(include_debug)
+
+    return service.ask_ai(str(tenant_id), question, **kwargs)
+
+
 def ask_ai_or_http_error(
     service: Any,
     *,
@@ -84,17 +119,20 @@ def ask_ai_or_http_error(
     reasoning: bool,
     model_id: str,
     file_ids: list[UUID],
+    include_debug: bool = False,
 ) -> dict[str, Any]:
     """Run ``service.ask_ai`` and translate expected failures into HTTP errors."""
     try:
-        return service.ask_ai(
-            str(tenant_id),
-            question,
+        return _call_service_ask_ai(
+            service,
+            tenant_id=tenant_id,
+            question=question,
             user_id=user_id,
-            conversation_id=str(conversation_id) if conversation_id else None,
+            conversation_id=conversation_id,
             reasoning=reasoning,
             model_id=model_id,
-            file_ids=[str(x) for x in file_ids],
+            file_ids=file_ids,
+            include_debug=include_debug,
         )
     except Exception as exc:
         logger.exception("AI request failed")
@@ -115,6 +153,7 @@ async def ai_event_stream(
     reasoning: bool,
     model_id: str,
     file_ids: list[UUID],
+    include_debug: bool = False,
 ) -> AsyncIterator[bytes]:
     """Server-Sent Events: started -> status -> result -> done (or error -> done).
 
@@ -125,14 +164,16 @@ async def ai_event_stream(
     yield sse_event("status", {"stage": "retrieving_context", "reasoning": reasoning})
     try:
         result = await asyncio.to_thread(
-            service.ask_ai,
-            str(tenant_id),
-            question,
+            _call_service_ask_ai,
+            service,
+            tenant_id=tenant_id,
+            question=question,
             user_id=user_id,
-            conversation_id=str(conversation_id) if conversation_id else None,
+            conversation_id=conversation_id,
             reasoning=reasoning,
             model_id=model_id,
-            file_ids=[str(x) for x in file_ids],
+            file_ids=file_ids,
+            include_debug=include_debug,
         )
         yield sse_event("result", result)
         yield sse_event("done", {"ok": True})

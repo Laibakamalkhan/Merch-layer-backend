@@ -348,6 +348,7 @@ class AIAnalyst:
         conversation_id: str | None = None,
         reasoning: bool = False,
         file_ids: list[str] | None = None,
+        include_debug: bool = False,
     ) -> dict[str, Any]:
         if conversation_id is None and user_id:
             conversation = self.db.create_conversation(
@@ -750,19 +751,39 @@ class AIAnalyst:
                     },
                 )
 
-            return {
+            debug_info = {
+                "sql": sql,
+                "execution_ms": execution_ms,
+                "row_count": verified.row_count,
+                "route": plan.get("route"),
+                "intent": intent,
+                "result_shape": verified.shape,
+                "already_aggregated": verified.already_aggregated,
+                "retrieved_context_ids": [
+                    str(c["chunk_id"]) for c in context
+                ],
+                "metric_codes": resolution.matched_codes(),
+            }
+
+            response: dict[str, Any] = {
                 "conversation_id": conversation_id,
                 "query_run_id": str(query_run_id),
                 "answer": answer,
-                "sql": sql,
-                "rows": rows,
-                "dashboard": dashboard,
                 "dashboard_id": str(
                     saved_dashboard["id"]
                 ),
-                "route": plan.get("route"),
+                "dashboard": dashboard,
+                # Retained for existing frontend compatibility (WorkspaceChat.jsx)
+                "rows": rows,
+                "sql": sql,
                 "reasoning": reasoning,
+                "route": plan.get("route"),
             }
+
+            if include_debug:
+                response["debug"] = debug_info
+
+            return response
 
         except Exception as exc:
             try:

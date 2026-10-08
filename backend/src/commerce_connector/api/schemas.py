@@ -150,6 +150,7 @@ class AIQuestionRequestV2(BaseModel):
     reasoning: bool = False
     model_id: str = Field(default="merchlayer-2.0", max_length=100)
     file_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    include_debug: bool = False
 
 
 class PlanChangeRequest(BaseModel):
@@ -176,6 +177,7 @@ class ConversationMessageCreate(BaseModel):
     reasoning: bool = False
     model_id: str = Field(default="merchlayer-2.0", max_length=100)
     file_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    include_debug: bool = False
 
 
 class DatasetIngestRequest(BaseModel):

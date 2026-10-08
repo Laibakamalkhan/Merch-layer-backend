@@ -147,6 +147,7 @@ class CommercePlatformService:
         reasoning: bool = False,
         model_id: str = "merchlayer-2.0",
         file_ids: list[str] | None = None,
+        include_debug: bool = False,
     ) -> dict[str, Any]:
         if not self.analyst:
             raise RuntimeError("Groq API key is required")
@@ -159,6 +160,7 @@ class CommercePlatformService:
             conversation_id=conversation_id,
             reasoning=reasoning,
             file_ids=file_ids or [],
+            include_debug=include_debug,
         )
         self.db.increment_usage(tenant_id, api_requests=1, ai_queries=1)
         return result

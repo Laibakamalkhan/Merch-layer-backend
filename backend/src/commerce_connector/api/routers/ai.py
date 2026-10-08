@@ -41,6 +41,7 @@ def ask_ai(payload: AIQuestionRequestV2, current_user: CurrentUser = Depends(get
         reasoning=payload.reasoning,
         model_id=payload.model_id,
         file_ids=payload.file_ids,
+        include_debug=payload.include_debug,
     )
 
 
@@ -59,6 +60,7 @@ async def stream_ai(payload: AIQuestionRequestV2, current_user: CurrentUser = De
             reasoning=payload.reasoning,
             model_id=payload.model_id,
             file_ids=payload.file_ids,
+            include_debug=payload.include_debug,
         ),
         media_type="text/event-stream",
         headers=SSE_HEADERS,

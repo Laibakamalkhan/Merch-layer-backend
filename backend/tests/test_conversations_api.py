@@ -315,3 +315,18 @@ def test_provider_and_database_failures_become_clean_json_errors(env):
     service.fail_with = KeyError("surprise")
     r = client.post(url, json=body)
     assert r.status_code == 500 and "KeyError" in r.json()["detail"]
+
+
+def test_include_debug_param_is_accepted_and_routed(env):
+    client, service, _ = env
+    cid = _make_conversation(client)
+    url = f"/api/v1/conversations/{cid}/messages"
+
+    # Default: include_debug defaults to False
+    res = client.post(url, json={"tenant_id": TENANT, "content": "hello"})
+    assert res.status_code == 201
+
+    # Explicit include_debug=True
+    res_debug = client.post(url, json={"tenant_id": TENANT, "content": "hello", "include_debug": True})
+    assert res_debug.status_code == 201
+
