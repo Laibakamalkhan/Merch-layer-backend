@@ -59,6 +59,11 @@ class ColumnProfile:
     sample_values: list[Any]
     suggested_field: str | None = None
     confidence: float = 0.0
+    unique_count: int = 0
+    null_percentage: float = 0.0
+    aggregatable: bool = False
+    is_dimension: bool = False
+    is_filter: bool = False
 
 
 @dataclass
@@ -75,6 +80,48 @@ class DatasetProfileResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_IDENTIFIER_FIELDS = {"source_id", "order_number", "email", "phone"}
+_MEASURE_FIELDS = {
+    "gross_amount",
+    "net_amount",
+    "discount_amount",
+    "shipping_amount",
+    "tax_amount",
+    "refunded_amount",
+    "orders_count",
+    "total_spent",
+}
+_DIMENSION_FIELDS = {
+    "currency_code",
+    "financial_status",
+    "fulfillment_status",
+    "status",
+    "sales_channel",
+    "title",
+    "product_type",
+    "vendor",
+    "display_name",
+    "first_name",
+    "last_name",
+}
+_TIME_FIELDS = {"source_created_at", "processed_at"}
+
+
+def _apply_column_roles(prof: ColumnProfile) -> None:
+    numeric = prof.inferred_type in {"integer", "decimal"}
+    temporal = prof.inferred_type == "date" or prof.suggested_field in _TIME_FIELDS
+    identifier = prof.suggested_field in _IDENTIFIER_FIELDS
+    measure = prof.suggested_field in _MEASURE_FIELDS or (numeric and not identifier and not temporal)
+    dimension = (
+        prof.suggested_field in _DIMENSION_FIELDS
+        or temporal
+        or (prof.inferred_type == "string" and not identifier)
+    )
+    prof.aggregatable = bool(measure)
+    prof.is_dimension = bool(dimension)
+    prof.is_filter = bool(dimension or measure or temporal)
 
 
 def _clean_header(name: str) -> str:
@@ -157,6 +204,8 @@ def profile_dataset(records: Iterable[dict[str, Any]], *, max_sample_rows: int =
             else:
                 inferred_type = max(type_counts.items(), key=lambda x: x[1])[0]
 
+        unique_count = len(set(key_values_map[col]))
+        null_percentage = round(null_count / len(rows), 4) if rows else 0.0
         column_profiles.append(
             ColumnProfile(
                 name=col,
@@ -164,6 +213,8 @@ def profile_dataset(records: Iterable[dict[str, Any]], *, max_sample_rows: int =
                 null_count=null_count,
                 total_count=len(rows),
                 sample_values=samples,
+                unique_count=unique_count,
+                null_percentage=null_percentage,
             )
         )
 
@@ -201,6 +252,9 @@ def profile_dataset(records: Iterable[dict[str, Any]], *, max_sample_rows: int =
             prof.suggested_field = best_field
             prof.confidence = best_conf
             suggested_mappings[prof.name] = best_field
+
+    for prof in column_profiles:
+        _apply_column_roles(prof)
 
     # Natural Key Detection & Duplicate Check
     candidate_key = None
@@ -243,7 +297,7 @@ def profile_dataset(records: Iterable[dict[str, Any]], *, max_sample_rows: int =
                 available.extend(["orders_count", "aov"])
         else:
             unavailable.extend(["revenue", "aov"])
-        unavailable.extend(["inventory_levels", "fulfillments"])
+        unavailable.extend(["inventory_levels", "fulfillments", "profit", "profit_margin", "margin"])
 
     return DatasetProfileResult(
         row_count=len(rows),

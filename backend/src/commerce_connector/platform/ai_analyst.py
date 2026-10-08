@@ -4,6 +4,14 @@ import json
 import time
 from typing import Any
 
+from commerce_connector.platform.analytics.metric_resolver import (
+    compact_semantic_context,
+    enforce_verified_metric_sql,
+    resolve_metrics,
+)
+from commerce_connector.platform.analytics.result_validator import (
+    validate_query_result,
+)
 from commerce_connector.platform.db import PostgresGateway
 from commerce_connector.platform.llm import LLMClient
 from commerce_connector.platform.rag import RagRetriever
@@ -39,6 +47,12 @@ The required JSON structure is:
 }
 
 Use only the supplied semantic context. Never invent columns or tables.
+
+When a verified metric definition is supplied, you MUST use its sql_expression
+exactly (or the equivalent pre-aggregated Gold column from that definition).
+Never invent a replacement aggregate, scaled expression, or guessed column for
+a verified metric. If a metric is listed as unsupported, do not generate SQL
+for it.
 
 Prefer Gold for standard KPIs and Silver for detailed/ad-hoc analysis.
 
@@ -383,6 +397,15 @@ class AIAnalyst:
                     "RAG index is empty. Build/rebuild the semantic index first."
                 )
 
+            snapshot = self.db.semantic_catalog_snapshot(tenant_id)
+            resolution = resolve_metrics(question, snapshot)
+            if not resolution.ok:
+                raise RuntimeError(
+                    resolution.message
+                    or "Required metric is not available in the semantic catalog."
+                )
+
+            catalog_text = compact_semantic_context(snapshot, resolution)
             semantic = "\n\n".join(
                 f"[{item['title']}] "
                 f"similarity={item['similarity']:.3f}\n"
@@ -448,7 +471,9 @@ class AIAnalyst:
                 "Create the analytics query plan for the user question below.\n\n"
                 "User question:\n"
                 f"{question}\n\n"
-                "Retrieved semantic context:\n"
+                f"{catalog_text}\n\n"
+                "Retrieved semantic context (supporting terminology only; "
+                "not a source of numerical values or metric SQL):\n"
                 f"{semantic}"
                 f"{history_text}"
                 f"{files_text}"
@@ -468,10 +493,30 @@ class AIAnalyst:
             )
 
             sql = str(plan.get("sql") or "")
+            intent = (
+                plan.get("intent")
+                if isinstance(plan.get("intent"), dict)
+                else None
+            )
+            enforce_verified_metric_sql(
+                sql,
+                snapshot=snapshot,
+                resolution=resolution,
+                intent=intent,
+            )
+            if intent:
+                post_resolution = resolve_metrics(
+                    question,
+                    snapshot,
+                    intent=intent,
+                )
+                if not post_resolution.ok:
+                    raise RuntimeError(
+                        post_resolution.message
+                        or "Required metric is not available in the semantic catalog."
+                    )
 
-            permissions = self.db.semantic_catalog_snapshot(
-                tenant_id
-            )["permissions"]
+            permissions = snapshot["permissions"]
 
             allowed = None
             max_rows = 5000
@@ -527,6 +572,7 @@ class AIAnalyst:
                         ],
                         "file_ids": file_ids or [],
                         "reasoning": reasoning,
+                        "metric_codes": resolution.matched_codes(),
                     },
                     error_message=guard.reason,
                 )
@@ -537,7 +583,7 @@ class AIAnalyst:
 
             started = time.perf_counter()
 
-            rows = self.db.execute_readonly_query(
+            raw_rows = self.db.execute_readonly_query(
                 guard.sql,
                 tenant_id,
             )
@@ -546,15 +592,52 @@ class AIAnalyst:
                 (time.perf_counter() - started) * 1000
             )
 
+            expected_metrics: list[Any] = list(resolution.matched)
+            expected_dimensions: list[str] = []
+            if intent:
+                intent_metric = intent.get("metric")
+                if intent_metric and not expected_metrics:
+                    expected_metrics.append(str(intent_metric))
+                expected_dimensions = [
+                    str(item)
+                    for item in (intent.get("dimensions") or [])
+                    if str(item).strip()
+                ]
+
+            verified = validate_query_result(
+                raw_rows,
+                expected_metrics=expected_metrics,
+                expected_dimensions=expected_dimensions,
+                max_rows=max_rows,
+            )
+            if not verified.ok:
+                raise RuntimeError(
+                    verified.message
+                    or "Query result failed verification; no replacement values were generated."
+                )
+
+            rows = verified.as_dicts()
+
             self.db.save_generated_query(
                 tenant_id=tenant_id,
                 query_run_id=query_run_id,
                 sql_text=sql,
                 validation_status="approved",
                 execution_ms=execution_ms,
-                row_count=len(rows),
+                row_count=verified.row_count,
                 result_preview=rows[:50],
             )
+
+            shape_note = (
+                f"Verified result shape: {verified.shape}. "
+                f"already_aggregated={verified.already_aggregated}. "
+                "PostgreSQL already calculated these values; do not recalculate."
+            )
+            if verified.shape == "empty":
+                shape_note = (
+                    "Verified result shape: empty. "
+                    "No matching rows were returned. Do not invent or substitute numbers."
+                )
 
             final_prompt = (
                 "Generate the final grounded analytics response.\n\n"
@@ -562,8 +645,9 @@ class AIAnalyst:
                 f"{question}\n\n"
                 "Executed SQL:\n"
                 f"{sql}\n\n"
+                f"{shape_note}\n\n"
                 "Database result JSON:\n"
-                f"{json.dumps(rows[:200], default=str)}"
+                f"{json.dumps(rows[:200], allow_nan=False)}"
                 f"{files_text}\n\n"
                 "IMPORTANT:\n"
                 "- The database result is authoritative.\n"
@@ -626,8 +710,12 @@ class AIAnalyst:
                         for c in context
                     ],
                     "file_ids": file_ids or [],
-                    "reasoning": reasoning,
-                },
+                        "reasoning": reasoning,
+                        "metric_codes": resolution.matched_codes(),
+                        "result_shape": verified.shape,
+                        "result_row_count": verified.row_count,
+                        "already_aggregated": verified.already_aggregated,
+                    },
             )
 
             if conversation_id:

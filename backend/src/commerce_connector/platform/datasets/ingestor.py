@@ -235,10 +235,14 @@ class DatasetIngestionOrchestrator:
                 except Exception as exc:
                     logger.warning("RAG rebuild failed after dataset ingestion: %s", exc)
 
+            profile_summary = dataset.get("profile_summary") or {}
             quality_summary = {
                 "input_records": len(normalized_records),
                 "silver_written": transform_result["written"],
                 "silver_rejected": transform_result["rejected"],
+                "available_metrics": profile_summary.get("available_metrics") or [],
+                "unavailable_metrics": profile_summary.get("unavailable_metrics") or [],
+                "detected_entity": dataset.get("detected_entity") or profile_summary.get("detected_entity"),
             }
 
             final_dataset = await asyncio.to_thread(

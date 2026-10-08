@@ -150,6 +150,12 @@ async def test_dataset_ingestion_natural_key_lifecycle():
         "file_type": "csv",
         "storage_path": f"datasets/{tenant_id}/{dataset_id}/orders.csv",
         "status": "profiled",
+        "detected_entity": "orders",
+        "profile_summary": {
+            "available_metrics": ["revenue", "orders_count"],
+            "unavailable_metrics": ["profit", "margin"],
+            "detected_entity": "orders",
+        },
     }
 
     raw_csv_v1 = b"order_id,amount,date\n1001,50.00,2026-09-01\n1002,75.00,2026-09-02\n1003,100.00,2026-09-03"
@@ -167,6 +173,10 @@ async def test_dataset_ingestion_natural_key_lifecycle():
     assert res["records_written"] == 3
     assert len(db.silver_orders) == 3
     assert len(gold.refresh_calls) == 1
+    quality = db.datasets[dataset_id]["quality_summary"]
+    assert quality["available_metrics"] == ["revenue", "orders_count"]
+    assert "profit" in quality["unavailable_metrics"]
+    assert quality["detected_entity"] == "orders"
     conn_id = res["connection_id"]
 
     # Step 2: Re-upload with modified row 1001, added row 1004, and deleted row 1003

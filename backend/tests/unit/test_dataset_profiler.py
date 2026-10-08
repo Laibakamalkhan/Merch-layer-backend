@@ -19,6 +19,16 @@ def test_profile_dataset_orders_detection():
     assert "orders_count" in result.available_metrics
     assert result.suggested_mappings.get("total_amount") == "gross_amount"
     assert result.suggested_mappings.get("order_date") == "source_created_at"
+    amount = next(c for c in result.columns if c.name == "total_amount")
+    order_id = next(c for c in result.columns if c.name == "order_id")
+    order_date = next(c for c in result.columns if c.name == "order_date")
+    assert amount.aggregatable is True
+    assert amount.unique_count == 3
+    assert amount.null_percentage == 0.0
+    assert order_id.aggregatable is False
+    assert order_date.is_dimension is True
+    assert order_date.is_filter is True
+    assert "profit" in result.unavailable_metrics
 
 
 def test_profile_dataset_duplicate_natural_key_detection():
