@@ -148,6 +148,95 @@ def test_preaggregated_gold_column_is_accepted_without_reinventing_sum():
     )
 
 
+AOV = {
+    "code": "average_order_value",
+    "name": "Average Order Value",
+    "description": "Average order value",
+    "sql_expression": "CASE WHEN SUM(orders_count)=0 THEN NULL ELSE SUM(net_sales)/SUM(orders_count) END",
+    "aggregation": "case",
+    "data_type": "currency",
+    "default_time_column": "metric_date",
+    "allowed_dimensions": ["date"],
+    "preferred_source_schema": "gold",
+    "preferred_source_table": "daily_sales",
+    "synonyms": ["aov", "average order value"],
+}
+
+AOV_SNAPSHOT = {
+    "metrics": [REVENUE, ORDERS, AOV],
+    "columns": SNAPSHOT["columns"],
+    "permissions": SNAPSHOT["permissions"],
+    "connections": SNAPSHOT["connections"],
+}
+
+
+def test_multi_metric_sql_is_accepted_when_each_aggregate_matches_a_verified_metric():
+    resolution = resolve_metrics("Show revenue orders and average order value for last 30 days", AOV_SNAPSHOT)
+    assert resolution.ok is True
+    assert {m.code for m in resolution.matched} >= {"revenue", "orders_count", "average_order_value"}
+
+    enforce_verified_metric_sql(
+        "select date_trunc('day', metric_date) as day, sum(net_sales) as revenue, count(*) as orders_count, "
+        "case when sum(orders_count)=0 then null else sum(net_sales)/sum(orders_count) end as average_order_value "
+        "from gold.daily_sales where tenant_id = :tenant_id and metric_date >= current_date - interval '30 day' "
+        "group by 1",
+        snapshot=AOV_SNAPSHOT,
+        resolution=resolution,
+        intent={"metric": "average_order_value"},
+    )
+
+
+def test_invented_aov_formula_is_rejected_when_definition_exists():
+    resolution = resolve_metrics("Show average order value", AOV_SNAPSHOT)
+    with pytest.raises(RuntimeError, match="Invented metric expression"):
+        enforce_verified_metric_sql(
+            "select sum(net_sales) / sum(orders_count) as average_order_value from gold.daily_sales "
+            "where tenant_id = :tenant_id",
+            snapshot=AOV_SNAPSHOT,
+            resolution=resolution,
+            intent={"metric": "average_order_value"},
+        )
+
+
+def test_governed_aov_case_expression_is_accepted():
+    resolution = resolve_metrics("Show average order value", AOV_SNAPSHOT)
+    enforce_verified_metric_sql(
+        "select case when sum(orders_count)=0 then null else sum(net_sales)/sum(orders_count) end as average_order_value "
+        "from gold.daily_sales where tenant_id = :tenant_id",
+        snapshot=AOV_SNAPSHOT,
+        resolution=resolution,
+        intent={"metric": "average_order_value"},
+    )
+
+
+def test_average_word_alone_does_not_match_average_order_value_metric():
+    resolution = resolve_metrics("Show average", AOV_SNAPSHOT)
+    assert resolution.ok is True
+    assert resolution.matched == []
+
+
+def test_precomputed_average_order_value_column_is_rejected():
+    resolution = resolve_metrics("Show average order value", AOV_SNAPSHOT)
+    with pytest.raises(RuntimeError, match="pre-computed ratio column"):
+        enforce_verified_metric_sql(
+            "select avg(average_order_value) as average_order_value from gold.daily_sales where tenant_id = :tenant_id",
+            snapshot=AOV_SNAPSHOT,
+            resolution=resolution,
+            intent={"metric": "average_order_value"},
+        )
+
+
+def test_complex_invented_expression_inside_sum_is_rejected():
+    resolution = resolve_metrics("Show revenue", SNAPSHOT)
+    with pytest.raises(RuntimeError, match="Invented metric expression"):
+        enforce_verified_metric_sql(
+            "select sum(net_sales - discounts) as revenue from gold.daily_sales where tenant_id = :tenant_id",
+            snapshot=SNAPSHOT,
+            resolution=resolution,
+            intent={"metric": "revenue"},
+        )
+
+
 def test_exploratory_question_without_named_kpi_is_not_blocked():
     resolution = resolve_metrics("List products by title", SNAPSHOT)
     assert resolution.ok is True

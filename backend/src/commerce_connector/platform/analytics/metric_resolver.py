@@ -12,11 +12,21 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
 
-_AGGREGATE_CALL = re.compile(
-    r"\b(sum|avg|average|min|max|count)\s*\(([^)]+)\)",
-    re.IGNORECASE,
-)
+# BE-008: use a balanced-parentheses parser rather than a regex that stops at
+# simple identifiers. Nested CASE expressions and arithmetic inside SUM()/AVG()
+# must still be validated.
+_AGGREGATE_CALL = re.compile(r"\b(sum|avg|min|max|count)\s*\(", re.IGNORECASE)
 _NON_TOKEN = re.compile(r"[^a-z0-9]+")
+
+# BE-007: strip table/CTE alias prefixes so 'ds.net_sales' compares equal to 'net_sales'.
+_ALIAS_PREFIX = re.compile(r"\b[a-z_][a-z0-9_]*\.", re.IGNORECASE)
+
+# BE-007: Gold mart columns that store a pre-computed per-row ratio.
+# Applying SUM or AVG across multiple rows produces a mathematically wrong
+# average-of-averages.  The LLM must use the governed metric sql_expression.
+_PRECOMPUTED_RATIO_COLUMNS: frozenset[str] = frozenset({
+    "average_order_value",  # gold.daily_sales per-day ratio; governed by metric 'average_order_value'
+})
 
 # Named KPIs that must never be calculated unless a catalog definition exists.
 UNSUPPORTED_WITHOUT_DEFINITION = {
@@ -81,13 +91,13 @@ class MetricDefinition:
                 continue
             expanded.append(text)
             collapsed = _NON_TOKEN.sub(" ", text.lower()).strip()
-            if collapsed:
+            if collapsed and collapsed != text.lower():
                 expanded.append(collapsed)
         seen: set[str] = set()
         out: list[str] = []
         for item in expanded:
             key = item.lower()
-            if key in seen or len(key) < 2:
+            if key in seen or len(key) < 3:
                 continue
             seen.add(key)
             out.append(item)
@@ -302,8 +312,24 @@ def enforce_verified_metric_sql(
     resolution: MetricResolution | None = None,
     intent: dict[str, Any] | None = None,
 ) -> None:
-    """Reject invented aggregates when a verified metric definition exists."""
+    """Reject invented aggregates when a verified metric definition exists.
 
+    BE-001 fix — the old logic iterated every aggregate call found in the SQL
+    and raised as soon as one didn't match the *current* metric's expression.
+    This produced false positives for multi-metric queries: a legitimate
+    SUM(net_sales) for the 'revenue' metric was rejected when 'average_order_value'
+    was also matched because SUM(net_sales) ≠ the AOV CASE expression.
+
+    Corrected logic:
+    1. Call _check_precomputed_ratio_aggregation() first (BE-007 guard).
+    2. Build a fingerprint set of every valid aggregate sub-expression taken from
+       ALL matched metric sql_expressions (alias-stripped so 'sum(ds.net_sales)'
+       and 'sum(net_sales)' are treated as equal).
+    3. For each matched metric whose expression is NOT literally present in the SQL,
+       scan the invented aggregate calls.  An invented call is only flagged when it
+       cannot be found in ANY verified fingerprint — meaning it truly belongs to no
+       known metric definition.
+    """
     intent_metric = None
     if isinstance(intent, dict):
         intent_metric = intent.get("metric")
@@ -326,44 +352,178 @@ def enforce_verified_metric_sql(
             if named in UNSUPPORTED_WITHOUT_DEFINITION:
                 raise RuntimeError(unsupported_metric_message(named))
 
-    compact_sql = _compact_sql(sql)
+    # BE-007: always reject SUM/AVG of pre-computed ratio columns regardless
+    # of which metric is being checked - must run before any early-return.
+    _check_precomputed_ratio_aggregation(sql)
+
+    if not to_check:
+        return
+
+    compact_sql_text = _compact_sql(sql)
+    sql_alias_stripped = _strip_table_alias(compact_sql_text)
     invented = _aggregate_calls(sql)
+
+    # BE-001: collect verified aggregate fingerprints from ALL matched metrics so
+    # that a legitimate sub-expression of metric A is not flagged when iterating
+    # metric B's check.  Store both the original compact form and the alias-stripped
+    # form so 'sum(ds.net_sales)' matches the fingerprint 'sum(net_sales)'.
+    verified_fingerprints: set[str] = set()
+    for m in to_check:
+        if not m.sql_expression:
+            continue
+        expr = _compact_sql(m.sql_expression)
+        verified_fingerprints.add(expr)
+        verified_fingerprints.add(_strip_table_alias(expr))
+        for fn2, inner2 in _aggregate_calls(m.sql_expression):
+            call = _compact_sql(f"{fn2}({inner2})")
+            verified_fingerprints.add(call)
+            verified_fingerprints.add(_strip_table_alias(call))
+
     for metric in to_check:
         if not metric.sql_expression:
             continue
         verified = _compact_sql(metric.sql_expression)
-        if verified and verified in compact_sql:
+        verified_stripped = _strip_table_alias(verified)
+
+        # If the metric's expression (or its alias-normalised form) is present in
+        # the SQL, this metric is satisfied — nothing else to check for it.
+        if verified and (verified in compact_sql_text or verified_stripped in sql_alias_stripped):
             continue
+
+        # Reject a re-combined aggregate formula when the metric alias is still in
+        # the SELECT output even though its verified definition is absent.  This
+        # catches cases like SUM(net_sales) / SUM(orders_count) for AOV while still
+        # allowing separate valid metric aggregates in the same query.
+        metric_aliases = {
+            metric.code.lower(),
+            metric.code.lower().replace("_", " "),
+            metric.name.lower(),
+            *[s.lower() for s in metric.synonyms],
+        }
+        metric_alias_touched = any(
+            re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", compact_sql_text)
+            for alias in metric_aliases
+            if alias
+        )
+        if metric_alias_touched and invented:
+            raise RuntimeError(
+                f"Invented metric expression {metric.sql_expression} is not allowed "
+                f"because metric '{metric.code}' is defined as {metric.sql_expression}."
+            )
+
+        # The metric's exact expression is absent from the SQL. Check each
+        # invented aggregate: if it is accounted for by ANY verified fingerprint,
+        # it belongs to a different valid metric — skip it.  Only raise when an
+        # aggregate is completely unrecognised.
         for fn, inner in invented:
             candidate = _compact_sql(f"{fn}({inner})")
-            if candidate != verified:
-                raise RuntimeError(
-                    f"Invented metric expression {fn.upper()}({inner.strip()}) is not allowed "
-                    f"because metric '{metric.code}' is defined as {metric.sql_expression}."
-                )
+            candidate_stripped = _strip_table_alias(candidate)
+            if candidate in verified_fingerprints or candidate_stripped in verified_fingerprints:
+                continue  # explained by another matched metric's verified expression
+            raise RuntimeError(
+                f"Invented metric expression {fn.upper()}({inner.strip()}) is not allowed "
+                f"because metric '{metric.code}' is defined as {metric.sql_expression}."
+            )
 
 
 def _normalize(text: str) -> str:
     return _NON_TOKEN.sub(" ", str(text or "").lower()).strip()
 
 
+def _strip_table_alias(sql: str) -> str:
+    return _ALIAS_PREFIX.sub("", str(sql or "")).strip()
+
+
 def _compact_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", str(sql or "")).strip().lower()
 
 
+def _extract_aggregate_arg(sql: str, start: int) -> tuple[str, str] | None:
+    """Split an aggregate call into (fn, inner_arg) using balanced parentheses."""
+    match = _AGGREGATE_CALL.search(sql, start)
+    if not match:
+        return None
+    fn = match.group(1)
+    open_paren = sql.find("(", match.start())
+    if open_paren == -1:
+        return None
+    index = open_paren + 1
+    depth = 1
+    while index < len(sql) and depth:
+        ch = sql[index]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        index += 1
+    if depth != 0:
+        return None
+    inner = sql[open_paren + 1 : index - 1].strip()
+    return fn.lower(), inner.strip()
+
+
 def _aggregate_calls(sql: str) -> list[tuple[str, str]]:
-    return [(fn.lower(), inner.strip()) for fn, inner in _AGGREGATE_CALL.findall(sql or "")]
+    text = str(sql or "")
+    results: list[tuple[str, str]] = []
+    cursor = 0
+    while True:
+        match = _AGGREGATE_CALL.search(text, cursor)
+        if not match:
+            break
+        parsed = _extract_aggregate_arg(text, match.start())
+        if parsed is not None:
+            results.append(parsed)
+        cursor = match.end()
+    return results
+
+
+def _check_precomputed_ratio_aggregation(sql: str) -> None:
+    """Reject SUM()/AVG() over pre-computed ratio columns like average_order_value."""
+    text = str(sql or "")
+
+    for fn_name in ("sum", "avg"):
+        cursor = 0
+        while True:
+            match = re.search(rf"\b{fn_name}\s*\(", text[cursor:], re.IGNORECASE)
+            if not match:
+                break
+            start = cursor + match.start()
+            parsed = _extract_aggregate_arg(text, start)
+            if parsed is None:
+                cursor = start + 1
+                continue
+
+            _fn, inner = parsed
+            normalized = _strip_table_alias(inner).lower().strip()
+            for ratio_column in sorted(_PRECOMPUTED_RATIO_COLUMNS, key=len, reverse=True):
+                pattern = rf"(?<![a-z0-9_]){re.escape(ratio_column)}(?![a-z0-9_])"
+                if re.search(pattern, normalized, flags=re.IGNORECASE):
+                    raise RuntimeError(
+                        "Metric validation rejected SUM()/AVG() of the pre-computed ratio column "
+                        f"'{ratio_column}'. Use the governed metric expression instead."
+                    )
+            cursor = start + len(match.group(0))
+
+
+# Keep a stable public API for tests and callers.
+_ALIAS_PREFIX = re.compile(r"\b[a-z_][a-z0-9_]*\.", re.IGNORECASE)
 
 
 def _match_catalog_metrics(haystack: str, metrics: Sequence[MetricDefinition]) -> list[MetricDefinition]:
-    padded = f" {haystack} "
+    text = f" {str(haystack or '').strip()} "
+    if not text.strip():
+        return []
+
     ranked: list[tuple[int, MetricDefinition]] = []
     for metric in metrics:
         best = 0
         for alias in metric.aliases():
-            needle = f" {_normalize(alias)} "
-            if needle.strip() and needle in padded:
-                best = max(best, len(needle.strip()))
+            alias_norm = _normalize(alias)
+            if not alias_norm:
+                continue
+            pattern = rf"(?<![a-z0-9]){re.escape(alias_norm)}(?![a-z0-9])"
+            if re.search(pattern, text):
+                best = max(best, len(alias_norm))
         if best:
             ranked.append((best, metric))
     ranked.sort(key=lambda item: item[0], reverse=True)
