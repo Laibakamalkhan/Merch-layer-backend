@@ -183,6 +183,72 @@ DAILY_AOV_SNAPSHOT = {
 }
 
 
+REAL_REGISTRY_METRICS = [
+    {
+        "code": "average_order_value",
+        "name": "Average Order Value",
+        "sql_expression": "case when sum(orders_count)=0 then null else sum(net_sales)/sum(orders_count) end",
+        "aggregation": "derived",
+        "allowed_dimensions": ["connection_id", "metric_date", "currency_code"],
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "daily_sales",
+        "synonyms": ["aov", "avg order value"],
+    },
+    {
+        "code": "gross_sales",
+        "name": "Gross Sales",
+        "sql_expression": "gross_sales",
+        "aggregation": "sum",
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "daily_sales",
+        "synonyms": ["gross revenue", "sales before refunds"],
+    },
+    {
+        "code": "net_sales",
+        "name": "Net Sales",
+        "sql_expression": "net_sales",
+        "aggregation": "sum",
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "daily_sales",
+        "synonyms": ["revenue", "sales", "net revenue"],
+    },
+    {
+        "code": "orders",
+        "name": "Orders",
+        "sql_expression": "orders_count",
+        "aggregation": "sum",
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "daily_sales",
+        "synonyms": ["order count", "number of orders"],
+    },
+    {
+        "code": "refund_rate",
+        "name": "Refund Rate",
+        "sql_expression": "refund_rate",
+        "aggregation": "derived",
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "refund_daily",
+        "synonyms": ["return rate", "refund percentage"],
+    },
+    {
+        "code": "units_sold",
+        "name": "Units Sold",
+        "sql_expression": "units_sold",
+        "aggregation": "sum",
+        "preferred_source_schema": "gold",
+        "preferred_source_table": "daily_sales",
+        "synonyms": ["quantity sold", "items sold"],
+    },
+]
+
+REAL_REGISTRY_SNAPSHOT = {
+    "metrics": REAL_REGISTRY_METRICS,
+    "columns": SNAPSHOT["columns"],
+    "permissions": SNAPSHOT["permissions"],
+    "connections": SNAPSHOT["connections"],
+}
+
+
 def test_multi_metric_sql_is_accepted_when_each_aggregate_matches_a_verified_metric():
     resolution = resolve_metrics("Show revenue orders and average order value for last 30 days", DAILY_AOV_SNAPSHOT)
     assert resolution.ok is True
@@ -280,6 +346,58 @@ def test_original_sales_overview_with_ds_aliases_rejects_ungoverned_aov():
             resolution=resolution,
             intent={"metric": "average_order_value"},
         )
+
+
+def test_real_registry_original_sales_overview_accepts_governed_ds_query():
+    question = (
+        "Give me a full sales overview for the last 30 days including total revenue, number of orders, "
+        "average order value, and top-selling products broken down by category."
+    )
+    resolution = resolve_metrics(question, REAL_REGISTRY_SNAPSHOT)
+    assert resolution.ok is True
+    assert {metric.code for metric in resolution.matched} >= {
+        "net_sales",
+        "orders",
+        "average_order_value",
+    }
+
+    enforce_verified_metric_sql(
+        "select sum(ds.net_sales) as net_sales, sum(ds.orders_count) as orders, "
+        "case when sum(ds.orders_count)=0 then null else sum(ds.net_sales)/sum(ds.orders_count) end "
+        "as average_order_value from gold.daily_sales ds where ds.tenant_id = :tenant_id "
+        "and ds.metric_date >= current_date - interval '30 day'",
+        snapshot=REAL_REGISTRY_SNAPSHOT,
+        resolution=resolution,
+        intent={"metric": "average_order_value"},
+    )
+
+
+def test_real_registry_rejects_aov_without_governed_case_expression():
+    question = (
+        "Give me a full sales overview for the last 30 days including total revenue, number of orders, "
+        "average order value, and top-selling products broken down by category."
+    )
+    resolution = resolve_metrics(question, REAL_REGISTRY_SNAPSHOT)
+    with pytest.raises(RuntimeError, match="Invented metric expression"):
+        enforce_verified_metric_sql(
+            "select sum(ds.net_sales) as net_sales, sum(ds.orders_count) as orders, "
+            "sum(ds.net_sales)/sum(ds.orders_count) as average_order_value "
+            "from gold.daily_sales ds where ds.tenant_id = :tenant_id "
+            "and ds.metric_date >= current_date - interval '30 day'",
+            snapshot=REAL_REGISTRY_SNAPSHOT,
+            resolution=resolution,
+            intent={"metric": "average_order_value"},
+        )
+
+
+def test_real_registry_resolves_order_phrase_and_revenue_synonym():
+    orders_resolution = resolve_metrics("Show the number of orders", REAL_REGISTRY_SNAPSHOT)
+    revenue_resolution = resolve_metrics("Show revenue", REAL_REGISTRY_SNAPSHOT)
+
+    assert orders_resolution.ok is True
+    assert [metric.code for metric in orders_resolution.matched] == ["orders"]
+    assert revenue_resolution.ok is True
+    assert [metric.code for metric in revenue_resolution.matched] == ["net_sales"]
 
 
 def test_precomputed_average_order_value_column_is_rejected():

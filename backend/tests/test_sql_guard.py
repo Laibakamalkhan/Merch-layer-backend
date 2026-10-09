@@ -41,3 +41,14 @@ def test_sql_guard_accepts_alias_scoped_tenant_filters():
         "where o.tenant_id = :tenant_id and p.tenant_id = :tenant_id"
     )
     assert result.ok is True
+
+
+def test_sql_guard_accepts_last_30_days_filter():
+    result = SQLGuard().validate(
+        "select sum(net_sales) as net_sales from gold.daily_sales "
+        "where tenant_id = :tenant_id "
+        "and metric_date >= current_date - interval '30 day'"
+    )
+
+    assert result.ok is True
+    assert "metric_date >= current_date - interval '30 day'" in result.sql

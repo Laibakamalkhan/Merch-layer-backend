@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
 from commerce_connector.platform.analytics.metric_resolver import (
+    MetricResolution,
     compact_semantic_context,
     enforce_verified_metric_sql,
     resolve_metrics,
@@ -332,6 +334,464 @@ FINAL_JSON_SCHEMA: dict[str, Any] = {
     },
 }
 
+MAX_SUBQUERIES = 4
+MAX_SUBQUERY_RETRIES = 2
+CATEGORY_UNAVAILABLE_MESSAGE = "The category breakdown is not available yet."
+
+
+class _SubqueryValidationError(Exception):
+    """A planner-generated sub-query failed a required validation stage."""
+
+
+def _build_subquery_tasks(
+    question: str,
+    resolution: Any,
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Group requested metrics by Gold/Silver source and cap the query count."""
+
+    groups: dict[tuple[str, str], list[Any]] = {}
+    for metric in resolution.matched:
+        key = (
+            str(metric.preferred_source_schema or "").lower(),
+            str(metric.preferred_source_table or "").lower(),
+        )
+        groups.setdefault(key, []).append(metric)
+
+    if not groups:
+        groups[("", "")] = []
+
+    tasks = [
+        {
+            "source": ".".join(part for part in source if part) or "catalog-authorized tables",
+            "metrics": metrics,
+        }
+        for source, metrics in groups.items()
+    ]
+    capped = len(tasks) > MAX_SUBQUERIES
+    tasks = tasks[:MAX_SUBQUERIES]
+
+    top_n = re.search(r"\b(top(?:\s+\d+)?|top[- ]selling|best[- ]selling)\b", question, re.I)
+    dimension_match = re.search(
+        r"\b(?:broken\s+down\s+by|by|per)\s+(category|categories|product|products)\b",
+        question,
+        re.I,
+    )
+    unavailable_dimension = None
+    if top_n and dimension_match:
+        dimension = dimension_match.group(1).lower()
+        canonical = "category" if dimension.startswith("categor") else "product"
+        permitted_dimensions = {
+            item.lower()
+            for metric in resolution.matched
+            for item in metric.allowed_dimensions
+        }
+        if canonical not in permitted_dimensions:
+            unavailable_dimension = canonical
+
+    notice = (
+        CATEGORY_UNAVAILABLE_MESSAGE
+        if unavailable_dimension == "category"
+        else (
+            f"The {unavailable_dimension} breakdown is not available yet."
+            if unavailable_dimension
+            else None
+        )
+    )
+    return tasks, capped, notice
+
+
+def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge verified per-query dashboard sections without changing the contract."""
+
+    if not dashboards:
+        return {
+            "title": "AI Analytics",
+            "kpis": [],
+            "charts": [],
+            "filters": [],
+            "no_data": True,
+        }
+
+    merged: dict[str, Any] = {
+        "title": next(
+            (item["title"] for item in dashboards if item.get("title")),
+            "AI Analytics",
+        ),
+        "kpis": [],
+        "charts": [],
+        "filters": [],
+        "no_data": all(bool(item.get("no_data")) for item in dashboards),
+    }
+    seen_kpis: set[str] = set()
+    seen_filters: set[tuple[str, str]] = set()
+    for dashboard in dashboards:
+        for kpi in dashboard.get("kpis") or []:
+            key = str(kpi.get("id") or kpi.get("column") or kpi.get("label"))
+            if key not in seen_kpis:
+                seen_kpis.add(key)
+                merged["kpis"].append(kpi)
+        merged["charts"].extend(dashboard.get("charts") or [])
+        for filter_item in dashboard.get("filters") or []:
+            key = (str(filter_item.get("field")), str(filter_item.get("type")))
+            if key not in seen_filters:
+                seen_filters.add(key)
+                merged["filters"].append(filter_item)
+    return merged
+
+
+def _execute_subquery(
+    *,
+    llm: LLMClient,
+    db: PostgresGateway,
+    tenant_id: str,
+    query_run_id: str,
+    question: str,
+    task: dict[str, Any],
+    snapshot: dict[str, Any],
+    resolution: Any,
+    context_text: str,
+    history_text: str,
+    files_text: str,
+    reasoning: bool,
+) -> dict[str, Any]:
+    permissions = snapshot.get("permissions") or []
+    allowed = (
+        {
+            (p["schema_name"], p["table_name"])
+            for p in permissions
+        }
+        if permissions
+        else None
+    )
+    max_rows = min(
+        max((int(p.get("max_rows") or 5000) for p in permissions), default=5000),
+        5000,
+    )
+    scoped_resolution = MetricResolution(
+        ok=resolution.ok,
+        metrics=resolution.metrics,
+        matched=list(task["metrics"]),
+    )
+    catalog_text = compact_semantic_context(snapshot, scoped_resolution)
+    subquery_goal = (
+        f"Create a query for the requested metric(s) "
+        f"{', '.join(metric.code for metric in task['metrics'])} "
+        f"from {task['source']}."
+        if task["metrics"]
+        else "Create one safe query that answers the supported part of the request."
+    )
+    planner_prompt = (
+        "Create one analytics query plan for this sub-query.\n\n"
+        f"Sub-query goal: {subquery_goal}\n"
+        f"User question:\n{question}\n\n"
+        f"{catalog_text}\n\n"
+        "Retrieved semantic context (supporting terminology only; not a source "
+        "of numerical values or metric SQL):\n"
+        f"{context_text}{history_text}{files_text}\n\n"
+        "Return exactly one JSON object matching the supplied schema. "
+        "Return exactly one safe read-only query, and do not return markdown. "
+        "Only answer this sub-query's verified metric goal. Do not attempt any "
+        "product or category breakdown unless the supplied metric definitions "
+        "and allowed dimensions explicitly support it."
+    )
+    if reasoning:
+        planner_prompt += (
+            "\nReasoning mode is enabled; consider multiple relevant metrics "
+            "and dimensions for this sub-query."
+        )
+
+    feedback = ""
+    failed_sql = ""
+    for attempt in range(MAX_SUBQUERY_RETRIES + 1):
+        prompt = planner_prompt
+        if feedback:
+            prompt += (
+                "\n\nValidation feedback for the previous attempt:\n"
+                f"Failed SQL:\n{failed_sql}\n"
+                f"Validation error:\n{feedback}\n"
+                "Correct the SQL for this sub-query. Do not remove required "
+                "tenant filters or bypass any validation."
+            )
+        plan = llm.generate_json(
+            prompt,
+            system=PLAN_SYSTEM,
+            temperature=0.0,
+            schema_name="analytics_query_plan",
+            schema=PLAN_JSON_SCHEMA,
+            reasoning_effort="high" if reasoning else "low",
+        )
+        sql = str(plan.get("sql") or "")
+        intent = plan.get("intent") if isinstance(plan.get("intent"), dict) else None
+        try:
+            try:
+                enforce_verified_metric_sql(
+                    sql,
+                    snapshot=snapshot,
+                    resolution=scoped_resolution,
+                    intent=intent,
+                )
+            except RuntimeError as exc:
+                raise _SubqueryValidationError(str(exc)) from exc
+
+            if intent:
+                post_resolution = resolve_metrics(
+                    question,
+                    snapshot,
+                    intent=intent,
+                )
+                if not post_resolution.ok:
+                    raise _SubqueryValidationError(
+                        post_resolution.message
+                        or "Required metric is not available in the semantic catalog."
+                    )
+
+            guard = SQLGuard(allowed_tables=allowed, max_rows=max_rows).validate(sql)
+            if not guard.ok:
+                db.save_generated_query(
+                    tenant_id=tenant_id,
+                    query_run_id=query_run_id,
+                    sql_text=sql,
+                    validation_status="blocked",
+                    blocked_reason=guard.reason,
+                )
+                raise _SubqueryValidationError(
+                    guard.reason or "Generated SQL did not pass SQL validation."
+                )
+
+            started = time.perf_counter()
+            raw_rows = db.execute_readonly_query(guard.sql, tenant_id)
+            execution_ms = int((time.perf_counter() - started) * 1000)
+            expected_dimensions = [
+                str(item)
+                for item in (intent.get("dimensions") or [])
+                if str(item).strip()
+            ] if intent else []
+            verified = validate_query_result(
+                raw_rows,
+                expected_metrics=list(task["metrics"]),
+                expected_dimensions=expected_dimensions,
+                max_rows=max_rows,
+            )
+            if not verified.ok:
+                raise _SubqueryValidationError(
+                    verified.message
+                    or "Query result failed verification."
+                )
+            rows = verified.as_dicts()
+            db.save_generated_query(
+                tenant_id=tenant_id,
+                query_run_id=query_run_id,
+                sql_text=sql,
+                validation_status="approved",
+                execution_ms=execution_ms,
+                row_count=verified.row_count,
+                result_preview=rows[:50],
+            )
+            return {
+                "plan": plan,
+                "sql": sql,
+                "intent": intent,
+                "verified": verified,
+                "rows": rows,
+                "execution_ms": execution_ms,
+                "validation_attempts": attempt + 1,
+                "resolution": scoped_resolution,
+            }
+        except _SubqueryValidationError as exc:
+            feedback = str(exc)
+            failed_sql = sql
+            if attempt >= MAX_SUBQUERY_RETRIES:
+                return {
+                    "plan": plan,
+                    "sql": "",
+                    "intent": intent,
+                    "failure": True,
+                    "resolution": scoped_resolution,
+                }
+
+    raise AssertionError("Sub-query retry loop exited without a result")
+
+
+def _complete_subquery_request(
+    *,
+    db: PostgresGateway,
+    llm: LLMClient,
+    tenant_id: str,
+    query_run_id: str,
+    question: str,
+    tasks: list[dict[str, Any]],
+    capped: bool,
+    breakdown_notice: str | None,
+    snapshot: dict[str, Any],
+    resolution: Any,
+    context: list[dict[str, Any]],
+    semantic: str,
+    history_text: str,
+    files_text: str,
+    file_ids: list[str] | None,
+    reasoning: bool,
+    conversation_id: str | None,
+    include_debug: bool,
+) -> dict[str, Any]:
+    outcomes = [
+        _execute_subquery(
+            llm=llm,
+            db=db,
+            tenant_id=tenant_id,
+            query_run_id=query_run_id,
+            question=question,
+            task=task,
+            snapshot=snapshot,
+            resolution=resolution,
+            context_text=semantic,
+            history_text=history_text,
+            files_text=files_text,
+            reasoning=reasoning,
+        )
+        for task in tasks
+    ]
+    successful = [item for item in outcomes if not item.get("failure")]
+    failed = [item for item in outcomes if item.get("failure")]
+    dashboards: list[dict[str, Any]] = []
+    answers: list[str] = []
+
+    for item in successful:
+        verified = item["verified"]
+        viz = recommend_visualizations(verified, intent=item["intent"])
+        shape_note = (
+            f"Verified result shape: {verified.shape}. "
+            f"already_aggregated={verified.already_aggregated}. "
+            "PostgreSQL already calculated these values; do not recalculate."
+        )
+        if verified.shape == "empty":
+            shape_note = (
+                "Verified result shape: empty. No matching rows were returned. "
+                "Do not invent or substitute numbers."
+            )
+        final_prompt = (
+            "Generate a grounded response for this executed analytics sub-query.\n\n"
+            f"User question:\n{question}\n\n"
+            f"Sub-query goal: {item['plan'].get('title') or 'verified analytics'}\n\n"
+            f"Executed SQL:\n{item['sql']}\n\n{shape_note}\n\n"
+            "Verified database result (authoritative; do not recalculate):\n"
+            f"{json.dumps(compact_verified_payload(verified), allow_nan=False)}"
+            f"{files_text}\n\n"
+            "Do not invent or calculate any number. Only reference columns "
+            "present in the database result. Dashboard numbers are copied "
+            "by the backend. For one-row aggregates use KPI aggregation "
+            '"value". Do not claim to have produced an unsupported breakdown.\n'
+            f"- {viz.prompt_text()}\n"
+            "Return exactly one JSON object matching the supplied schema."
+        )
+        final = llm.generate_json(
+            final_prompt,
+            system=FINAL_SYSTEM,
+            temperature=0.0,
+            schema_name="analytics_final_response",
+            schema=FINAL_JSON_SCHEMA,
+            reasoning_effort="high" if reasoning else "low",
+        )
+        dashboards.append(
+            _normalise_dashboard(
+                final.get("dashboard"),
+                item["rows"],
+                intent=item["intent"],
+                verified=verified,
+                metrics=item["resolution"].matched,
+                title=str(item["plan"].get("title") or "AI Analytics"),
+            )
+        )
+        answer_text = str(final.get("answer") or "").strip()
+        if answer_text:
+            answers.append(answer_text)
+
+    dashboard = _merge_dashboards(dashboards)
+    notices: list[str] = []
+    if breakdown_notice:
+        notices.append(breakdown_notice)
+    if failed:
+        notices.append("I couldn't produce one requested section after checking its query.")
+    if capped:
+        notices.append(
+            "Some requested analyses were omitted because this request is limited to four queries."
+        )
+    answer = " ".join([*answers, *notices]).strip()
+    if not answer:
+        answer = "I couldn't produce the requested analytics from the available verified data."
+
+    rows = [row for item in successful for row in item["rows"]]
+    sql = "\n\n".join(item["sql"] for item in successful)
+    execution_ms = sum(item["execution_ms"] for item in successful)
+    first_outcome = successful[0] if successful else (outcomes[0] if outcomes else {})
+    first_plan = first_outcome.get("plan") or {}
+    first_intent = first_outcome.get("intent")
+    verified_results = [item["verified"] for item in successful]
+    title = str(dashboard.get("title") or "AI Analytics")
+    saved_dashboard = db.save_dashboard_spec(
+        tenant_id,
+        query_run_id,
+        title,
+        answer,
+        dashboard,
+    )
+    db.update_query_run(
+        query_run_id,
+        status="completed",
+        route=first_plan.get("route"),
+        intent=first_intent or {},
+        selected_context={
+            "chunks": [str(c["chunk_id"]) for c in context],
+            "file_ids": file_ids or [],
+            "reasoning": reasoning,
+            "metric_codes": resolution.matched_codes(),
+            "result_shapes": [result.shape for result in verified_results],
+            "partial": bool(failed or breakdown_notice or capped),
+        },
+    )
+    if conversation_id:
+        db.add_message(
+            tenant_id,
+            conversation_id,
+            "assistant",
+            answer,
+            {
+                "query_run_id": str(query_run_id),
+                "dashboard_id": str(saved_dashboard["id"]),
+                "route": first_plan.get("route"),
+            },
+        )
+
+    response: dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "query_run_id": str(query_run_id),
+        "answer": answer,
+        "dashboard_id": str(saved_dashboard["id"]),
+        "dashboard": dashboard,
+        "rows": rows,
+        "sql": sql,
+        "reasoning": reasoning,
+        "route": first_plan.get("route"),
+    }
+    if include_debug:
+        response["debug"] = {
+            "sql": sql,
+            "execution_ms": execution_ms,
+            "row_count": len(rows),
+            "route": first_plan.get("route"),
+            "intent": first_intent,
+            "result_shape": (
+                verified_results[0].shape
+                if len(verified_results) == 1
+                else "grouped"
+            ),
+            "already_aggregated": all(
+                result.already_aggregated for result in verified_results
+            ),
+            "retrieved_context_ids": [str(c["chunk_id"]) for c in context],
+            "metric_codes": resolution.matched_codes(),
+        }
+    return response
+
 
 class AIAnalyst:
     def __init__(self, db: PostgresGateway, llm: LLMClient):
@@ -467,6 +927,32 @@ class AIAnalyst:
                             for f in files
                         )
                     )
+
+            tasks, capped, breakdown_notice = _build_subquery_tasks(
+                question,
+                resolution,
+            )
+            if len(tasks) > 1 or capped or breakdown_notice:
+                return _complete_subquery_request(
+                    db=self.db,
+                    llm=self.llm,
+                    tenant_id=tenant_id,
+                    query_run_id=str(query_run_id),
+                    question=question,
+                    tasks=tasks,
+                    capped=capped,
+                    breakdown_notice=breakdown_notice,
+                    snapshot=snapshot,
+                    resolution=resolution,
+                    context=context,
+                    semantic=semantic,
+                    history_text=history_text,
+                    files_text=files_text,
+                    file_ids=file_ids,
+                    reasoning=reasoning,
+                    conversation_id=conversation_id,
+                    include_debug=include_debug,
+                )
 
             planner_hint = ""
 
