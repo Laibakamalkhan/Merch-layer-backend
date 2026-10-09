@@ -314,7 +314,9 @@ def test_provider_and_database_failures_become_clean_json_errors(env):
 
     service.fail_with = KeyError("surprise")
     r = client.post(url, json=body)
-    assert r.status_code == 500 and "KeyError" in r.json()["detail"]
+    assert r.status_code == 500
+    assert "KeyError" not in r.json()["detail"]
+    assert "Something went wrong" in r.json()["detail"]
 
 
 def test_include_debug_param_is_accepted_and_routed(env):

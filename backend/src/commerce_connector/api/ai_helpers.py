@@ -41,13 +41,13 @@ def map_ai_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, GroqTransportError):
         return HTTPException(
             status_code=502,
-            detail=f"Could not establish a reliable HTTPS connection to Groq. {exc}",
+            detail="The AI provider returned an error. Please try again.",
         )
     if isinstance(exc, GroqAPIError):
         status = exc.status_code if 400 <= exc.status_code < 600 else 502
         return HTTPException(
             status_code=status,
-            detail=f"Groq API returned HTTP {exc.status_code}. {exc.body[:1200]}",
+            detail="The AI provider returned an error. Please try again.",
         )
     if isinstance(exc, httpx.TimeoutException):
         return HTTPException(status_code=504, detail="The AI provider (Groq) timed out. Please try again.")
@@ -56,10 +56,10 @@ def map_ai_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
         return HTTPException(status_code=503, detail="Database connection problem. Please try again.")
     if isinstance(exc, psycopg.Error):
-        return HTTPException(status_code=500, detail=f"Database error ({type(exc).__name__}). See backend logs.")
+        return HTTPException(status_code=500, detail="A database error occurred. Please try again.")
     if isinstance(exc, RuntimeError):
         return HTTPException(status_code=503, detail=str(exc))
-    return HTTPException(status_code=500, detail=f"Unexpected error ({type(exc).__name__}). See backend logs.")
+    return HTTPException(status_code=500, detail="Something went wrong. Please try again.")
 
 
 def enforce_ai_limit(service: Any, tenant_id: UUID) -> None:

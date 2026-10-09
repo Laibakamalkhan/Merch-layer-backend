@@ -351,11 +351,16 @@ _RELATIVE_PERIOD_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_METRIC_DATE_PREDICATE_PATTERN = re.compile(
+    r"(?:\b\w+\.)?metric_date\s*(?:>=|<=|>|<|=|!=|\bbetween\b|\bin\b)|(?:>=|<=|>|<|=|!=)\s*(?:\b\w+\.)?metric_date\b",
+    re.IGNORECASE,
+)
+
 
 def _enforce_relative_date_filter(question: str, sql: str) -> None:
-    """Validate that questions asking for a relative period contain a metric_date filter."""
+    """Validate that questions asking for a relative period contain a metric_date filter predicate."""
     if _RELATIVE_PERIOD_PATTERN.search(question):
-        if not re.search(r"\bmetric_date\b", sql, re.IGNORECASE):
+        if not _METRIC_DATE_PREDICATE_PATTERN.search(sql):
             raise _SubqueryValidationError(
                 "SQL must filter metric_date for the requested period"
             )
@@ -755,14 +760,26 @@ def _complete_subquery_request(
             f"- {viz.prompt_text()}\n"
             "Return exactly one JSON object matching the supplied schema."
         )
-        final = llm.generate_json(
-            final_prompt,
-            system=FINAL_SYSTEM,
-            temperature=0.0,
-            schema_name="analytics_final_response",
-            schema=FINAL_JSON_SCHEMA,
-            reasoning_effort="high" if reasoning else "low",
-        )
+        try:
+            final = llm.generate_json(
+                final_prompt,
+                system=FINAL_SYSTEM,
+                temperature=0.0,
+                schema_name="analytics_final_response",
+                schema=FINAL_JSON_SCHEMA,
+                reasoning_effort="high" if reasoning else "low",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Final response LLM generation failed for query_run_id=%s: %s",
+                query_run_id,
+                exc,
+            )
+            final = {}
+
+        if not isinstance(final, dict):
+            final = {}
+
         dashboards.append(
             _normalise_dashboard(
                 final.get("dashboard"),
@@ -774,8 +791,9 @@ def _complete_subquery_request(
             )
         )
         answer_text = str(final.get("answer") or "").strip()
-        if answer_text:
-            answers.append(answer_text)
+        if not answer_text:
+            answer_text = "Here are the verified results for your request."
+        answers.append(answer_text)
 
     dashboard = _merge_dashboards(dashboards)
     notices: list[str] = []
@@ -806,20 +824,37 @@ def _complete_subquery_request(
         answer,
         dashboard,
     )
-    db.update_query_run(
-        query_run_id,
-        status="completed",
-        route=first_plan.get("route"),
-        intent=first_intent or {},
-        selected_context={
-            "chunks": [str(c["chunk_id"]) for c in context],
-            "file_ids": file_ids or [],
-            "reasoning": reasoning,
-            "metric_codes": resolution.matched_codes(),
-            "result_shapes": [result.shape for result in verified_results],
-            "partial": bool(failed or breakdown_notice or capped),
-        },
-    )
+    if not successful:
+        db.update_query_run(
+            query_run_id,
+            status="failed",
+            error_message="All sub-queries failed validation or execution.",
+            route=first_plan.get("route"),
+            intent=first_intent or {},
+            selected_context={
+                "chunks": [str(c["chunk_id"]) for c in context],
+                "file_ids": file_ids or [],
+                "reasoning": reasoning,
+                "metric_codes": resolution.matched_codes(),
+                "result_shapes": [],
+                "partial": True,
+            },
+        )
+    else:
+        db.update_query_run(
+            query_run_id,
+            status="completed",
+            route=first_plan.get("route"),
+            intent=first_intent or {},
+            selected_context={
+                "chunks": [str(c["chunk_id"]) for c in context],
+                "file_ids": file_ids or [],
+                "reasoning": reasoning,
+                "metric_codes": resolution.matched_codes(),
+                "result_shapes": [result.shape for result in verified_results],
+                "partial": bool(failed or breakdown_notice or capped),
+            },
+        )
     if conversation_id:
         db.add_message(
             tenant_id,
