@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 import psycopg.errors
 
@@ -37,8 +38,21 @@ def create_app() -> FastAPI:
             logger.warning("Duplicate record on %s %s", request.method, request.url.path)
             return JSONResponse(status_code=409, content={"detail": "Yeh record pehle se maujood hai."})
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-            return JSONResponse(status_code=500, content={"detail": f"Internal server error ({type(exc).__name__})"})
+            request_id = uuid.uuid4().hex[:8]
+            logger.exception(
+                "Unhandled error [request_id=%s] on %s %s: %s",
+                request_id,
+                request.method,
+                request.url.path,
+                exc,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Something went wrong. Please try again.",
+                    "request_id": request_id,
+                },
+            )
 
     app.add_middleware(
         CORSMiddleware,

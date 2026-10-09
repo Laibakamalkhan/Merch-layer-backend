@@ -175,4 +175,4 @@ class RagRetriever:
     def retrieve(self, tenant_id: str, question: str, count: int = 8) -> list[dict[str, Any]]:
         embedding = self.llm.embed(question, task="query")
         # Semantic catalog chhota hai; top-k recall ko similarity threshold se block na karein.
-        return self.db.match_chunks(tenant_id, embedding, count=count, min_similarity=None)
+        return self.db.match_chunks(tenant_id, embedding, count=count, min_similarity=0.20)
