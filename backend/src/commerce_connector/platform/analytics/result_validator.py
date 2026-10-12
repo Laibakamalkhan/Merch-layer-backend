@@ -165,6 +165,8 @@ def _result_shape(
         return "grouped"
     if dimension_columns:
         return "grouped"
+    if all(v is None for v in rows[0].values()):
+        return "empty"
     if _row_is_numeric_only(rows[0]):
         return "one_row_aggregate"
     return "grouped"

@@ -61,30 +61,33 @@ class SQLGuard:
             if self.allowed_tables is not None and ref not in self.allowed_tables:
                 return GuardResult(False, candidate, f"Table not allowed: {ref[0]}.{ref[1]}")
 
-        # Every Silver/Gold table reference must be tenant-scoped. This prevents a
-        # generated query from filtering one table while accidentally scanning another
-        # tenant's rows through a join or CTE.
-        table_refs = re.findall(
+        # Every Silver/Gold table reference must be tenant-scoped within its enclosing
+        # query scope (CTE body, subquery, or outer query). This prevents a query from
+        # filtering one table while scanning another tenant's rows through a join, CTE, or subquery.
+        table_ref_pattern = re.compile(
             r"\b(?:from|join)\s+([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)(?:\s+(?:as\s+)?(?!where\b|join\b|on\b|group\b|order\b|limit\b|left\b|right\b|inner\b|outer\b|full\b|cross\b|union\b|having\b)([a-z_][a-z0-9_]*))?",
-            candidate,
             re.IGNORECASE,
         )
-        for schema, table, alias in table_refs:
-            if schema.lower() not in {"silver", "gold"}:
-                continue
-            qualifier = (alias or table).lower()
-            patterns = [
-                rf"\b{re.escape(qualifier)}\.tenant_id\s*=\s*:tenant_id\b",
-                rf"\b{re.escape(table.lower())}\.tenant_id\s*=\s*:tenant_id\b",
-            ]
-            if not alias:
-                patterns.append(r"(?<![.\w])tenant_id\s*=\s*:tenant_id\b")
-            if not any(re.search(pattern, candidate, re.IGNORECASE) for pattern in patterns):
-                return GuardResult(
-                    False,
-                    candidate,
-                    f"Tenant filter missing for {schema}.{table}" + (f" (alias {alias})" if alias else ""),
-                )
+
+        blocks = self._extract_query_blocks(candidate)
+        for block in blocks:
+            table_refs = table_ref_pattern.findall(block)
+            for schema, table, alias in table_refs:
+                if schema.lower() not in {"silver", "gold"}:
+                    continue
+                qualifier = (alias or table).lower()
+                patterns = [
+                    rf"\b{re.escape(qualifier)}\.tenant_id\s*=\s*:tenant_id\b",
+                    rf"\b{re.escape(table.lower())}\.tenant_id\s*=\s*:tenant_id\b",
+                ]
+                if not alias:
+                    patterns.append(r"(?<![.\w])tenant_id\s*=\s*:tenant_id\b")
+                if not any(re.search(pattern, block, re.IGNORECASE) for pattern in patterns):
+                    return GuardResult(
+                        False,
+                        candidate,
+                        f"Tenant filter missing for {schema}.{table}" + (f" (alias {alias})" if alias else ""),
+                    )
 
         if not re.search(
             r"\btenant_id\s*=\s*:tenant_id\b|\b[a-z_][a-z0-9_]*\.tenant_id\s*=\s*:tenant_id\b",
@@ -98,3 +101,20 @@ class SQLGuard:
         if not re.search(r"\blimit\s+\d+\b", executable, re.IGNORECASE):
             executable = f"{executable}\nLIMIT {self.max_rows}"
         return GuardResult(True, executable)
+
+    @staticmethod
+    def _extract_query_blocks(sql: str) -> list[str]:
+        """Break a SQL query into discrete query scopes (CTE bodies, subqueries, outer query)."""
+        blocks: list[str] = []
+        text = sql
+        while True:
+            match = re.search(r"\(([^()]+)\)", text)
+            if not match:
+                break
+            inner = match.group(1)
+            if re.search(r"\b(?:select|from|join)\b", inner, re.IGNORECASE):
+                blocks.append(inner)
+            start, end = match.span()
+            text = text[:start] + f" __SUBQUERY_BLOCK_{len(blocks)}__ " + text[end:]
+        blocks.append(text)
+        return blocks

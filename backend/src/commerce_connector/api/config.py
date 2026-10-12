@@ -39,12 +39,20 @@ class APISettings:
     cors_origins: tuple[str, ...] = DEFAULT_CORS
     # FIX #2: email confirmation link ab yahan redirect karega (pehle Supabase ka default Site URL = localhost:3000 use hota tha)
     frontend_url: str = "http://localhost:5173"
+    app_env: str = "production"
+    debug_user_ids: tuple[str, ...] = ()
+    analyst_database_url: str = ""
 
     @classmethod
     def from_env(cls) -> "APISettings":
         raw_pages = os.getenv("MAX_PAGES_PER_RESOURCE", "").strip()
         raw_origins = os.getenv("CORS_ORIGINS", ",".join(DEFAULT_CORS))
         origins = tuple(x.strip() for x in raw_origins.split(",") if x.strip())
+        raw_env = os.getenv("APP_ENV", "production").strip().lower()
+        if raw_env not in {"development", "staging", "production"}:
+            raw_env = "production"
+        raw_debug_users = os.getenv("DEBUG_USER_IDS", "").strip()
+        debug_users = tuple(x.strip() for x in raw_debug_users.split(",") if x.strip())
         return cls(
             database_url=(os.getenv("DATABASE_URL", "") or os.getenv("SUPABASE_DATABASE_URL", "")).strip(),
             supabase_url=os.getenv("SUPABASE_URL", "").strip(),
@@ -69,4 +77,7 @@ class APISettings:
             max_pages_per_resource=int(raw_pages) if raw_pages else None,
             cors_origins=origins or DEFAULT_CORS,
             frontend_url=os.getenv("FRONTEND_URL", "http://localhost:5173").strip().rstrip("/"),
+            app_env=raw_env,
+            debug_user_ids=debug_users,
+            analyst_database_url=os.getenv("ANALYST_DATABASE_URL", "").strip(),
         )

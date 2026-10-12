@@ -1,0 +1,104 @@
+-- PROPOSAL ONLY: do not apply as-is.
+--
+-- The checked-in repository confirms gold.product_daily and the Silver
+-- products/categories/product_categories tables exist, but does not define
+-- their columns, foreign keys, tenant/connection keys, or category cardinality.
+-- Confirm those facts against the target Supabase schema before converting this
+-- proposal into an executable migration.
+--
+-- Intended outcome:
+--   1. Expose a tenant-scoped product/category Gold grain that carries product
+--      metrics and labels without asking the planner to guess a Silver join.
+--   2. Register product-level metric definitions against that Gold source.
+--
+-- Required design check before building the Gold view:
+--   A product may have multiple category associations. Decide whether the view
+--   should report the full product amount under every associated category or
+--   whether the source provides an allocation rule. Do not sum the resulting
+--   category rows as though they were mutually exclusive without such a rule.
+--
+-- Read-only schema discovery for the migration author:
+-- SELECT table_schema, table_name, column_name, data_type
+-- FROM information_schema.columns
+-- WHERE (table_schema, table_name) IN (
+--     ('gold', 'product_daily'),
+--     ('silver', 'products'),
+--     ('silver', 'product_categories'),
+--     ('silver', 'categories')
+-- )
+-- ORDER BY table_schema, table_name, ordinal_position;
+--
+-- Proposed Gold object after its joins and tenant-scoping keys are verified:
+--
+-- CREATE OR REPLACE VIEW gold.product_category_daily AS
+-- SELECT
+--     pd.tenant_id,
+--     pd.connection_id,
+--     pd.metric_date,
+--     pd.currency_code,
+--     pd.product_id,
+--     <verified product display column> AS product_name,
+--     <verified category key> AS category_id,
+--     <verified category label column> AS category_name,
+--     pd.orders_count,
+--     pd.units_sold,
+--     pd.gross_sales,
+--     pd.net_sales
+-- FROM gold.product_daily AS pd
+-- JOIN silver.products AS p
+--   ON <verified product identity and tenant/connection join>
+-- JOIN silver.product_categories AS pc
+--   ON <verified product-category relationship and tenant scope>
+-- JOIN silver.categories AS c
+--   ON <verified category identity and tenant/connection join>;
+--
+-- The view must only be created after the relationship predicates, row
+-- cardinality, and tenant/connection isolation are confirmed. If the project
+-- requires all analytics to be physically materialized in Gold, replace this
+-- view proposal with an owned Gold table/materialization and its refresh path.
+--
+-- Proposed global registry definitions (tenant_id NULL), using the observed
+-- registry fields. Verify column types/constraints and the source view before
+-- uncommenting/adapting these statements. Use a NOT EXISTS guard or the
+-- confirmed unique key so reruns cannot create duplicate definitions.
+--
+-- INSERT INTO ai.metric_definitions (
+--     tenant_id, code, name, description, preferred_source_schema,
+--     preferred_source_table, sql_expression, aggregation, data_type,
+--     default_time_column, allowed_dimensions, synonyms, active
+-- )
+-- SELECT
+--     NULL, 'product_net_sales', 'Product Net Sales',
+--     'Net sales at product and category grain.',
+--     'gold', 'product_category_daily', 'SUM(net_sales)', 'sum', 'currency',
+--     'metric_date',
+--     '["connection_id","metric_date","currency_code","product_id","product_name","category_id","category_name"]',
+--     '["product revenue","product sales"]', TRUE
+-- WHERE NOT EXISTS (
+--     SELECT 1 FROM ai.metric_definitions
+--     WHERE tenant_id IS NULL AND code = 'product_net_sales'
+-- );
+--
+-- INSERT INTO ai.metric_definitions (
+--     tenant_id, code, name, description, preferred_source_schema,
+--     preferred_source_table, sql_expression, aggregation, data_type,
+--     default_time_column, allowed_dimensions, synonyms, active
+-- )
+-- SELECT
+--     NULL, 'product_units_sold', 'Product Units Sold',
+--     'Units sold at product and category grain.',
+--     'gold', 'product_category_daily', 'SUM(units_sold)', 'sum', 'integer',
+--     'metric_date',
+--     '["connection_id","metric_date","currency_code","product_id","product_name","category_id","category_name"]',
+--     '["top-selling products","quantity sold by product"]', TRUE
+-- WHERE NOT EXISTS (
+--     SELECT 1 FROM ai.metric_definitions
+--     WHERE tenant_id IS NULL AND code = 'product_units_sold'
+-- );
+--
+-- Validation required before applying a completed migration:
+--   * SQLGuard permissions include the Gold object; tenant scope is preserved.
+--   * Gold view columns are registered in ai.semantic_columns.
+--   * Metric SQL expressions and allowed_dimensions match the verified view.
+--   * Product/category cardinality behavior is explicitly tested.
+--   * A query can return top products by category for a bounded date range.

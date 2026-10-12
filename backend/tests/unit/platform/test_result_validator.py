@@ -118,3 +118,30 @@ def test_oversized_result_is_rejected():
     assert verified.message is not None
     assert "exceeds the allowed maximum of 3" in verified.message
     assert "no replacement" in verified.message.lower()
+
+
+def test_single_row_all_null_is_empty():
+    verified = validate_query_result(
+        [{"total_revenue": None}],
+        expected_metrics=[REVENUE],
+        max_rows=5000,
+    )
+
+    assert verified.ok is True
+    assert verified.shape == "empty"
+    assert verified.row_count == 1
+    assert verified.rows == ({"total_revenue": None},)
+
+
+def test_single_row_with_value_is_one_row_aggregate():
+    verified = validate_query_result(
+        [{"total_revenue": Decimal("150.00")}],
+        expected_metrics=[REVENUE],
+        max_rows=5000,
+    )
+
+    assert verified.ok is True
+    assert verified.shape == "one_row_aggregate"
+    assert verified.row_count == 1
+    assert verified.rows == ({"total_revenue": 150.0},)
+
