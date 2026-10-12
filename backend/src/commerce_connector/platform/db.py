@@ -630,6 +630,84 @@ class PostgresGateway:
             logger.warning("Failed to fetch data coverage for tenant_id=%s: %s", tenant_id, exc)
             return {"first_date": None, "last_date": None, "days_with_data": 0}
 
+    def get_data_profile_raw(self, tenant_id: str | UUID) -> dict[str, Any]:
+        tid = str(tenant_id)
+        default_raw: dict[str, Any] = {
+            "daily_sales": {
+                "first_date": None,
+                "last_date": None,
+                "rows": 0,
+                "currencies": [],
+            },
+            "tables": {
+                "daily_sales": 0,
+                "products": 0,
+                "refunds": 0,
+                "customers": 0,
+                "channels": 0,
+                "fulfillment": 0,
+                "inventory": 0,
+            },
+            "silver_orders": 0,
+        }
+        try:
+            ds_agg_sql = (
+                "select min(metric_date) as first_date, max(metric_date) as last_date, "
+                "count(*) as rows from gold.daily_sales where tenant_id = %s"
+            )
+            ds_agg = self.fetch_one(ds_agg_sql, (tid,)) or {}
+
+            ds_curr_sql = (
+                "select currency_code, coalesce(sum(orders_count), 0) as orders_count_sum, "
+                "coalesce(sum(net_sales), 0) as net_sales_sum "
+                "from gold.daily_sales where tenant_id = %s "
+                "group by currency_code"
+            )
+            ds_curr = self.fetch_all(ds_curr_sql, (tid,)) or []
+
+            table_queries = {
+                "products": "select count(*) as cnt from gold.product_daily where tenant_id = %s",
+                "refunds": "select count(*) as cnt from gold.refund_daily where tenant_id = %s",
+                "customers": "select count(*) as cnt from gold.customer_metrics where tenant_id = %s",
+                "channels": "select count(*) as cnt from gold.channel_daily where tenant_id = %s",
+                "fulfillment": "select count(*) as cnt from gold.fulfillment_daily where tenant_id = %s",
+                "inventory": "select count(*) as cnt from gold.inventory_snapshot_daily where tenant_id = %s",
+            }
+            tables: dict[str, int] = {}
+            daily_sales_rows = int(ds_agg.get("rows") or 0)
+            tables["daily_sales"] = daily_sales_rows
+
+            for tbl_key, sql in table_queries.items():
+                res = self.fetch_one(sql, (tid,)) or {}
+                tables[tbl_key] = int(res.get("cnt") or 0)
+
+            silver_orders_sql = "select count(*) as cnt from silver.orders where tenant_id = %s"
+            silver_res = self.fetch_one(silver_orders_sql, (tid,)) or {}
+            silver_orders_count = int(silver_res.get("cnt") or 0)
+
+            currencies_list = [
+                {
+                    "currency_code": r.get("currency_code") or "UNKNOWN",
+                    "orders_count_sum": int(r.get("orders_count_sum") or 0),
+                    "net_sales_sum": float(r.get("net_sales_sum") or 0),
+                }
+                for r in ds_curr
+            ]
+
+            return {
+                "daily_sales": {
+                    "first_date": ds_agg.get("first_date"),
+                    "last_date": ds_agg.get("last_date"),
+                    "rows": daily_sales_rows,
+                    "currencies": currencies_list,
+                },
+                "tables": tables,
+                "silver_orders": silver_orders_count,
+            }
+        except Exception as exc:
+            logger.warning("Failed to fetch data profile raw for tenant_id=%s: %s", tenant_id, exc)
+            return default_raw
+
     def create_query_run(
         self,
         tenant_id: str | UUID,
