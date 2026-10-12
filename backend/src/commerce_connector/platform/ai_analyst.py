@@ -462,6 +462,10 @@ _TIME_WINDOW_PATTERN = re.compile(
     r"yesterday|today|ytd|mtd|"
     r"(?:last|past|previous|this|next)\s+(?:week|month|quarter|year|\d+\s+days?)|"
     r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"q[1-4]|fy\d{2,4}|"
+    r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"weekend|ago|since|until|between|half|fortnight|"
     r"\b(?:19|20)\d{2}\b"
     r")\b",
     re.IGNORECASE,

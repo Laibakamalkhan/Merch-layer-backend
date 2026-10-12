@@ -944,6 +944,39 @@ def test_overview_integration_full_window_suffix(monkeypatch):
     assert res["dashboard"]["window_days"] == 30
 
 
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        ("dashboard for Q1", False),
+        ("dashboard for jan", False),
+        ("dashboard for sept", False),
+        ("dashboard for last monday", False),
+        ("dashboard for 5 days ago", False),
+        ("dashboard for last weekend", False),
+        ("dashboard for the first half", False),
+        ("dashboard since march", False),
+        ("dashboard between jan and mar", False),
+        ("dashboard for yesterday", False),
+        ("dashboard for march", False),
+        ("overview for 2025", False),
+        ("dashboard for today", False),
+        ("overview next month", False),
+        ("dashboard", True),
+        ("generate me a dashboard for my data", True),
+        ("dashboard for last 30 days", True),
+        ("overview of the last 2 weeks", True),
+        ("dashboard this month", True),
+        ("give me a summary of the last quarter", True),
+        ("dashboard this year", True),
+        ("show my dashboard", True),
+        ("give me an overview", True),
+    ],
+)
+def test_t4e_overview_request_time_windows(question: str, expected: bool):
+    assert is_overview_request(question) is expected
+
+
+
 
 
 
