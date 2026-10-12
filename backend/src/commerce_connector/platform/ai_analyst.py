@@ -390,7 +390,7 @@ _CURRENCY_TABLES_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MONEY_IDENTIFIER_PATTERN = re.compile(
-    r"(?:sales|revenue|amount|price|discount|refund|aov|cost|tax|shipping|total|spend|value|margin|profit)",
+    r"(?:sales|revenue|amount|price|discount|refund|aov|cost|tax|shipping|spend|value|margin|profit)",
     re.IGNORECASE,
 )
 _CURRENCY_CODE_PATTERN = re.compile(r"\bcurrency_code\b", re.IGNORECASE)
@@ -419,6 +419,80 @@ def _enforce_single_currency(sql: str | None, currencies: list[str] | None) -> N
         "SQL must GROUP BY currency_code or filter one currency_code; "
         "never add amounts across currencies."
     )
+
+
+_UNREQUESTED_WINDOW_TIME_WORDS = (
+    "recent",
+    "recently",
+    "latest",
+    "lately",
+    "current",
+    "currently",
+    "now",
+    "last",
+    "past",
+    "previous",
+    "this",
+    "week",
+    "weeks",
+    "month",
+    "months",
+    "quarter",
+    "year",
+    "years",
+    "day",
+    "days",
+    "daily",
+    "weekly",
+    "monthly",
+    "yearly",
+    "ago",
+    "tomorrow",
+    "pichle",
+    "pichla",
+    "pichli",
+    "hafta",
+    "hafte",
+    "mahina",
+    "mahine",
+    "saal",
+    "aaj",
+    "kal",
+)
+_QUESTION_TIME_WORDS_PATTERN = re.compile(
+    r"\b(?:" + "|".join(sorted(_UNREQUESTED_WINDOW_TIME_WORDS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+_SQL_METRIC_DATE_PATTERN = re.compile(r"\bmetric_date\b", re.IGNORECASE)
+_SQL_CURRENT_DATE_WINDOW_PATTERN = re.compile(
+    r"(?:\bcurrent_date\b|\bnow\s*\(|\bcurrent_timestamp\b|\blocaltimestamp\b)",
+    re.IGNORECASE,
+)
+
+
+def _enforce_no_unrequested_date_window(question: str | None, sql: str | None) -> None:
+    """Validate that queries without requested periods do not filter metric_date by CURRENT_DATE or NOW()."""
+    try:
+        if not question or not isinstance(question, str):
+            return
+        if not sql or not isinstance(sql, str):
+            return
+        if (
+            _TIME_WINDOW_PATTERN.search(question)
+            or _RELATIVE_PERIOD_PATTERN.search(question)
+            or _QUESTION_TIME_WORDS_PATTERN.search(question)
+        ):
+            return
+        if _SQL_METRIC_DATE_PATTERN.search(sql) and _SQL_CURRENT_DATE_WINDOW_PATTERN.search(sql):
+            raise _SubqueryValidationError(
+                "The question does not ask for a specific period, so do not filter "
+                "by today's date. Use all available data (no CURRENT_DATE / NOW() "
+                "window on metric_date)."
+            )
+    except _SubqueryValidationError:
+        raise
+    except Exception:
+        return
 
 
 def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
@@ -1378,6 +1452,7 @@ def _execute_subquery(
 
             _enforce_relative_date_filter(question, sql)
             _enforce_single_currency(sql, currencies)
+            _enforce_no_unrequested_date_window(question, sql)
 
             if intent:
                 post_resolution = resolve_metrics(
