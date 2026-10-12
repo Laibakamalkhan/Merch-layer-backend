@@ -1,0 +1,223 @@
+﻿diff --git a/backend/src/commerce_connector/platform/ai_analyst.py b/backend/src/commerce_connector/platform/ai_analyst.py
+index 5797117..16a1f90 100644
+--- a/backend/src/commerce_connector/platform/ai_analyst.py
++++ b/backend/src/commerce_connector/platform/ai_analyst.py
+@@ -5,4 +5,5 @@ import logging
+ import re
+ import time
++from datetime import date, datetime
+ from typing import Any
+ 
+@@ -424,4 +425,19 @@ def _build_subquery_tasks(
+ 
+ 
++def _format_human_date(val: Any) -> str | None:
++    if val is None:
++        return None
++    if isinstance(val, (datetime, date)):
++        d = val.date() if isinstance(val, datetime) else val
++        return f"{d.day} {d.strftime('%B')} {d.year}"
++    if isinstance(val, str):
++        try:
++            d = datetime.fromisoformat(val).date()
++            return f"{d.day} {d.strftime('%B')} {d.year}"
++        except Exception:
++            return str(val)
++    return str(val)
++
++
+ def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
+     """Merge verified per-query dashboard sections without changing the contract."""
+@@ -446,4 +462,7 @@ def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
+         "no_data": all(bool(item.get("no_data")) for item in dashboards),
+     }
++    data_ranges = [d.get("data_range") for d in dashboards if "data_range" in d]
++    if data_ranges:
++        merged["data_range"] = data_ranges[0]
+     seen_kpis: set[str] = set()
+     seen_filters: set[tuple[str, str]] = set()
+@@ -733,6 +752,48 @@ def _complete_subquery_request(
+     answers: list[str] = []
+ 
++    coverage_fetched = False
++    cached_coverage: dict[str, Any] = {"first_date": None, "last_date": None, "days_with_data": 0}
++
+     for item in successful:
+         verified = item["verified"]
++        if verified.shape == "empty":
++            if not coverage_fetched:
++                coverage_fetched = True
++                try:
++                    cached_coverage = db.get_data_coverage(tenant_id) or cached_coverage
++                except Exception as exc:
++                    logger.warning("Failed to get data coverage for empty result: %s", exc)
++                    cached_coverage = {"first_date": None, "last_date": None, "days_with_data": 0}
++
++            first_date_val = cached_coverage.get("first_date")
++            last_date_val = cached_coverage.get("last_date")
++
++            if first_date_val and last_date_val:
++                f_str = _format_human_date(first_date_val)
++                l_str = _format_human_date(last_date_val)
++                answer_text = (
++                    f"No data was found for the requested period. "
++                    f"Your data covers {f_str} to {l_str}. "
++                    f"Try a date range inside that period."
++                )
++            else:
++                answer_text = "No data has been synced or uploaded for this workspace yet."
++
++            sub_dashboard = _normalise_dashboard(
++                {},
++                item["rows"],
++                intent=item["intent"],
++                verified=verified,
++                metrics=item["resolution"].matched,
++                title=str(item["plan"].get("title") or "AI Analytics"),
++            )
++            sub_dashboard["data_range"] = {
++                "first_date": first_date_val.isoformat() if hasattr(first_date_val, "isoformat") else (str(first_date_val) if first_date_val else None),
++                "last_date": last_date_val.isoformat() if hasattr(last_date_val, "isoformat") else (str(last_date_val) if last_date_val else None),
++            }
++            dashboards.append(sub_dashboard)
++            answers.append(answer_text)
++            continue
++
+         viz = recommend_visualizations(verified, intent=item["intent"])
+         shape_note = (
+@@ -741,9 +802,4 @@ def _complete_subquery_request(
+             "PostgreSQL already calculated these values; do not recalculate."
+         )
+-        if verified.shape == "empty":
+-            shape_note = (
+-                "Verified result shape: empty. No matching rows were returned. "
+-                "Do not invent or substitute numbers."
+-            )
+         final_prompt = (
+             "Generate a grounded response for this executed analytics sub-query.\n\n"
+diff --git a/backend/src/commerce_connector/platform/db.py b/backend/src/commerce_connector/platform/db.py
+index 17a837f..aa292db 100644
+--- a/backend/src/commerce_connector/platform/db.py
++++ b/backend/src/commerce_connector/platform/db.py
+@@ -612,4 +612,23 @@ class PostgresGateway:
+             return list(cur.fetchall())
+ 
++    def get_data_coverage(self, tenant_id: str | UUID) -> dict[str, Any]:
++        sql = (
++            "select min(metric_date) as first_date, max(metric_date) as last_date, "
++            "count(*) as days_with_data "
++            "from gold.daily_sales where tenant_id = %s"
++        )
++        try:
++            row = self.fetch_one(sql, (str(tenant_id),))
++            if not row:
++                return {"first_date": None, "last_date": None, "days_with_data": 0}
++            return {
++                "first_date": row.get("first_date"),
++                "last_date": row.get("last_date"),
++                "days_with_data": int(row.get("days_with_data") or 0),
++            }
++        except Exception as exc:
++            logger.warning("Failed to fetch data coverage for tenant_id=%s: %s", tenant_id, exc)
++            return {"first_date": None, "last_date": None, "days_with_data": 0}
++
+     def create_query_run(
+         self,
+diff --git a/backend/tests/unit/platform/test_ai_contract.py b/backend/tests/unit/platform/test_ai_contract.py
+index 914f728..6defdd3 100644
+--- a/backend/tests/unit/platform/test_ai_contract.py
++++ b/backend/tests/unit/platform/test_ai_contract.py
+@@ -38,8 +38,15 @@ def _new_multi_query_analyst(monkeypatch, planner, final, *, result_rows=None):
+     monkeypatch.setattr(fake_db, "save_dashboard_spec", lambda *a, **k: {"id": "dash-multi"})
+     monkeypatch.setattr(fake_db, "update_query_run", lambda *a, **k: None)
++    monkeypatch.setattr(
++        fake_db,
++        "get_data_coverage",
++        lambda *a, **k: {"first_date": None, "last_date": None, "days_with_data": 0},
++    )
+     def execute_readonly_query(sql, tenant_id):
+         fake_db.executed_sql.append(sql)
+         rows = result_rows(sql) if callable(result_rows) else result_rows
+-        return rows or [{"net_sales": 400, "orders": 8, "average_order_value": 50}]
++        if rows is not None:
++            return rows
++        return [{"net_sales": 400, "orders": 8, "average_order_value": 50}]
+ 
+     monkeypatch.setattr(fake_db, "execute_readonly_query", execute_readonly_query)
+@@ -524,2 +531,76 @@ def test_ai_analyst_ask_separates_public_and_debug_response(monkeypatch):
+     assert res_debug["debug"]["already_aggregated"] is True
+     assert res_debug["debug"]["retrieved_context_ids"] == ["c-1"]
++
++
++def test_empty_subquery_with_data_coverage(monkeypatch):
++    from datetime import date
++
++    planner = lambda prompt: _metric_plan(_VALID_REAL_KPI_SQL, metric="net_sales")
++    llm_called = False
++    def final(prompt):
++        nonlocal llm_called
++        llm_called = True
++        return {}
++
++    analyst = _new_multi_query_analyst(
++        monkeypatch,
++        planner,
++        final,
++        result_rows=[],
++    )
++    monkeypatch.setattr(
++        analyst.db,
++        "get_data_coverage",
++        lambda tid: {
++            "first_date": date(2026, 1, 1),
++            "last_date": date(2026, 3, 15),
++            "days_with_data": 74,
++        },
++    )
++
++    res = analyst.ask("tenant-1", "What was revenue for April 2026?")
++
++    assert llm_called is False
++    assert "1 January 2026" in res["answer"]
++    assert "15 March 2026" in res["answer"]
++    assert res["dashboard"]["no_data"] is True
++    assert res["dashboard"]["data_range"] == {
++        "first_date": "2026-01-01",
++        "last_date": "2026-03-15",
++    }
++
++
++def test_empty_subquery_without_data_coverage(monkeypatch):
++    planner = lambda prompt: _metric_plan(_VALID_REAL_KPI_SQL, metric="net_sales")
++    llm_called = False
++    def final(prompt):
++        nonlocal llm_called
++        llm_called = True
++        return {}
++
++    analyst = _new_multi_query_analyst(
++        monkeypatch,
++        planner,
++        final,
++        result_rows=[],
++    )
++    monkeypatch.setattr(
++        analyst.db,
++        "get_data_coverage",
++        lambda tid: {
++            "first_date": None,
++            "last_date": None,
++            "days_with_data": 0,
++        },
++    )
++
++    res = analyst.ask("tenant-1", "What was revenue for April 2026?")
++
++    assert llm_called is False
++    assert "No data has been synced or uploaded for this workspace yet." in res["answer"]
++    assert res["dashboard"]["no_data"] is True
++    assert res["dashboard"]["data_range"] == {
++        "first_date": None,
++        "last_date": None,
++    }
++

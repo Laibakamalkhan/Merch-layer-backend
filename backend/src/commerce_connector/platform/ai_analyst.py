@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from datetime import date, datetime
 from typing import Any
 
 logger = logging.getLogger("commerce_connector.platform.ai_analyst")
@@ -423,6 +424,21 @@ def _build_subquery_tasks(
     return tasks, capped, notice
 
 
+def _format_human_date(val: Any) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, (datetime, date)):
+        d = val.date() if isinstance(val, datetime) else val
+        return f"{d.day} {d.strftime('%B')} {d.year}"
+    if isinstance(val, str):
+        try:
+            d = datetime.fromisoformat(val).date()
+            return f"{d.day} {d.strftime('%B')} {d.year}"
+        except Exception:
+            return str(val)
+    return str(val)
+
+
 def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
     """Merge verified per-query dashboard sections without changing the contract."""
 
@@ -445,6 +461,9 @@ def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
         "filters": [],
         "no_data": all(bool(item.get("no_data")) for item in dashboards),
     }
+    data_ranges = [d.get("data_range") for d in dashboards if "data_range" in d]
+    if data_ranges:
+        merged["data_range"] = data_ranges[0]
     seen_kpis: set[str] = set()
     seen_filters: set[tuple[str, str]] = set()
     for dashboard in dashboards:
@@ -732,19 +751,56 @@ def _complete_subquery_request(
     dashboards: list[dict[str, Any]] = []
     answers: list[str] = []
 
+    coverage_fetched = False
+    cached_coverage: dict[str, Any] = {"first_date": None, "last_date": None, "days_with_data": 0}
+
     for item in successful:
         verified = item["verified"]
+        if verified.shape == "empty":
+            if not coverage_fetched:
+                coverage_fetched = True
+                try:
+                    cached_coverage = db.get_data_coverage(tenant_id) or cached_coverage
+                except Exception as exc:
+                    logger.warning("Failed to get data coverage for empty result: %s", exc)
+                    cached_coverage = {"first_date": None, "last_date": None, "days_with_data": 0}
+
+            first_date_val = cached_coverage.get("first_date")
+            last_date_val = cached_coverage.get("last_date")
+
+            if first_date_val and last_date_val:
+                f_str = _format_human_date(first_date_val)
+                l_str = _format_human_date(last_date_val)
+                answer_text = (
+                    f"No data was found for the requested period. "
+                    f"Your data covers {f_str} to {l_str}. "
+                    f"Try a date range inside that period."
+                )
+            else:
+                answer_text = "No data has been synced or uploaded for this workspace yet."
+
+            sub_dashboard = _normalise_dashboard(
+                {},
+                item["rows"],
+                intent=item["intent"],
+                verified=verified,
+                metrics=item["resolution"].matched,
+                title=str(item["plan"].get("title") or "AI Analytics"),
+            )
+            sub_dashboard["data_range"] = {
+                "first_date": first_date_val.isoformat() if hasattr(first_date_val, "isoformat") else (str(first_date_val) if first_date_val else None),
+                "last_date": last_date_val.isoformat() if hasattr(last_date_val, "isoformat") else (str(last_date_val) if last_date_val else None),
+            }
+            dashboards.append(sub_dashboard)
+            answers.append(answer_text)
+            continue
+
         viz = recommend_visualizations(verified, intent=item["intent"])
         shape_note = (
             f"Verified result shape: {verified.shape}. "
             f"already_aggregated={verified.already_aggregated}. "
             "PostgreSQL already calculated these values; do not recalculate."
         )
-        if verified.shape == "empty":
-            shape_note = (
-                "Verified result shape: empty. No matching rows were returned. "
-                "Do not invent or substitute numbers."
-            )
         final_prompt = (
             "Generate a grounded response for this executed analytics sub-query.\n\n"
             f"User question:\n{question}\n\n"

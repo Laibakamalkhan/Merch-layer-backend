@@ -611,6 +611,25 @@ class PostgresGateway:
             cur.execute(sql, {"tenant_id": str(tenant_id)})
             return list(cur.fetchall())
 
+    def get_data_coverage(self, tenant_id: str | UUID) -> dict[str, Any]:
+        sql = (
+            "select min(metric_date) as first_date, max(metric_date) as last_date, "
+            "count(*) as days_with_data "
+            "from gold.daily_sales where tenant_id = %s"
+        )
+        try:
+            row = self.fetch_one(sql, (str(tenant_id),))
+            if not row:
+                return {"first_date": None, "last_date": None, "days_with_data": 0}
+            return {
+                "first_date": row.get("first_date"),
+                "last_date": row.get("last_date"),
+                "days_with_data": int(row.get("days_with_data") or 0),
+            }
+        except Exception as exc:
+            logger.warning("Failed to fetch data coverage for tenant_id=%s: %s", tenant_id, exc)
+            return {"first_date": None, "last_date": None, "days_with_data": 0}
+
     def create_query_run(
         self,
         tenant_id: str | UUID,

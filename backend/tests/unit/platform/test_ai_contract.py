@@ -37,10 +37,17 @@ def _new_multi_query_analyst(monkeypatch, planner, final, *, result_rows=None):
     monkeypatch.setattr(fake_db, "save_generated_query", lambda *a, **k: {"id": "generated"})
     monkeypatch.setattr(fake_db, "save_dashboard_spec", lambda *a, **k: {"id": "dash-multi"})
     monkeypatch.setattr(fake_db, "update_query_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        fake_db,
+        "get_data_coverage",
+        lambda *a, **k: {"first_date": None, "last_date": None, "days_with_data": 0},
+    )
     def execute_readonly_query(sql, tenant_id):
         fake_db.executed_sql.append(sql)
         rows = result_rows(sql) if callable(result_rows) else result_rows
-        return rows or [{"net_sales": 400, "orders": 8, "average_order_value": 50}]
+        if rows is not None:
+            return rows
+        return [{"net_sales": 400, "orders": 8, "average_order_value": 50}]
 
     monkeypatch.setattr(fake_db, "execute_readonly_query", execute_readonly_query)
 
@@ -523,3 +530,77 @@ def test_ai_analyst_ask_separates_public_and_debug_response(monkeypatch):
     assert res_debug["debug"]["result_shape"] == "one_row_aggregate"
     assert res_debug["debug"]["already_aggregated"] is True
     assert res_debug["debug"]["retrieved_context_ids"] == ["c-1"]
+
+
+def test_empty_subquery_with_data_coverage(monkeypatch):
+    from datetime import date
+
+    planner = lambda prompt: _metric_plan(_VALID_REAL_KPI_SQL, metric="net_sales")
+    llm_called = False
+    def final(prompt):
+        nonlocal llm_called
+        llm_called = True
+        return {}
+
+    analyst = _new_multi_query_analyst(
+        monkeypatch,
+        planner,
+        final,
+        result_rows=[],
+    )
+    monkeypatch.setattr(
+        analyst.db,
+        "get_data_coverage",
+        lambda tid: {
+            "first_date": date(2026, 1, 1),
+            "last_date": date(2026, 3, 15),
+            "days_with_data": 74,
+        },
+    )
+
+    res = analyst.ask("tenant-1", "What was revenue for April 2026?")
+
+    assert llm_called is False
+    assert "1 January 2026" in res["answer"]
+    assert "15 March 2026" in res["answer"]
+    assert res["dashboard"]["no_data"] is True
+    assert res["dashboard"]["data_range"] == {
+        "first_date": "2026-01-01",
+        "last_date": "2026-03-15",
+    }
+
+
+def test_empty_subquery_without_data_coverage(monkeypatch):
+    planner = lambda prompt: _metric_plan(_VALID_REAL_KPI_SQL, metric="net_sales")
+    llm_called = False
+    def final(prompt):
+        nonlocal llm_called
+        llm_called = True
+        return {}
+
+    analyst = _new_multi_query_analyst(
+        monkeypatch,
+        planner,
+        final,
+        result_rows=[],
+    )
+    monkeypatch.setattr(
+        analyst.db,
+        "get_data_coverage",
+        lambda tid: {
+            "first_date": None,
+            "last_date": None,
+            "days_with_data": 0,
+        },
+    )
+
+    res = analyst.ask("tenant-1", "What was revenue for April 2026?")
+
+    assert llm_called is False
+    assert "No data has been synced or uploaded for this workspace yet." in res["answer"]
+    assert res["dashboard"]["no_data"] is True
+    assert res["dashboard"]["data_range"] == {
+        "first_date": None,
+        "last_date": None,
+    }
+
