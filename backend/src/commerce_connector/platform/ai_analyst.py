@@ -447,18 +447,71 @@ OVERVIEW_PATTERN = re.compile(
 )
 
 _SPECIFIC_QUESTION_KEYWORDS = re.compile(
-    r"\b(why|how\s+many|what\s+is|what\s+was|which|compare|breakdown|highest|lowest|top\s+\d+|versus|vs\b|refund\s+rate|aov\b|average\s+order)\b",
+    r"\b("
+    r"why|how\s+many|what\s+is|what\s+was|which|compare|breakdown|highest|lowest|"
+    r"top(?:\s+\d+)?|bottom|best|worst|versus|vs\b|refund\s+rate|aov\b|average\s+order|"
+    r"growth|increase|decrease|forecast|predict|"
+    r"by|per|grouped(?:\s+by)?|trend(?:\s+of)?|"
+    r"yesterday|today|ytd|mtd|"
+    r"(?:last|past|previous|this|next)\s+(?:week|month|quarter|year|\d+\s+days?)|"
+    r"january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"\b(?:19|20)\d{2}\b|"
+    r"kitni|kitna|kitne|kyun|kyon|kab|konsa|kaunsa|sab\s+se|sabse"
+    r")\b",
     re.IGNORECASE,
 )
 
+_METRIC_WORDS = {
+    "revenue", "sales", "orders", "order", "aov", "refund",
+    "refunds", "discount", "discounts", "profit", "margin",
+    "customers", "customer", "products", "product", "units",
+    "tax", "shipping", "inventory", "fulfillment", "traffic",
+}
+
+_STRONG_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"dashboard|overview|summary|summarize|summarise|insights|insight|"
+    r"report|snapshot|analytics|performance|"
+    r"how\s+am\s+i\s+doing|"
+    r"how\s+is\s+my\s+(?:store|business)|"
+    r"analy[sz]e\s+my\s+data"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_WEAK_INTENT_PATTERN = re.compile(
+    r"\b("
+    r"my\s+data|my\s+store|my\s+business|"
+    r"mera|meri|mere|hisab|"
+    r"dikhao|dikha|banao|bana\s+do"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_OVERVIEW_CONTAINER_PATTERN = re.compile(r"\b(dashboard|overview)\b", re.IGNORECASE)
+
 
 def is_overview_request(question: str) -> bool:
+    if question is None:
+        return False
     q = (question or "").strip()
     if not q:
         return False
-    if _SPECIFIC_QUESTION_KEYWORDS.search(q):
+
+    words = q.split()
+    if len(words) > 12:
         return False
-    q_norm = re.sub(r"[^a-z0-9\s]", "", q.lower()).strip()
+
+    q_norm = re.sub(r"[^a-z0-9\s]", " ", q.lower())
+    q_norm = re.sub(r"\s+", " ", q_norm).strip()
+    if not q_norm:
+        return False
+
+    # Specific marker -> False
+    if _SPECIFIC_QUESTION_KEYWORDS.search(q_norm):
+        return False
+
+    # Existing exact generic phrases -> True
     generic_phrases = {
         "generate me a dashboard for my data",
         "generate a dashboard for my data",
@@ -483,7 +536,30 @@ def is_overview_request(question: str) -> bool:
     }
     if q_norm in generic_phrases:
         return True
+
+    tokens = set(q_norm.split())
+    has_metric = bool(tokens & _METRIC_WORDS)
+
+    # Metric-word rule:
+    # if metric present, return False UNLESS it contains "dashboard" or "overview"
+    if has_metric:
+        if _OVERVIEW_CONTAINER_PATTERN.search(q_norm):
+            return True
+        return False
+
+    # Strong / weak intent rule (when no metric word is present)
+    if _STRONG_INTENT_PATTERN.search(q_norm):
+        return True
+
+    if _WEAK_INTENT_PATTERN.search(q_norm):
+        # Roman-Urdu / weak intent words combined with intent or action words
+        # E.g. "mera dashboard dikhao" handled by strong/OVERVIEW_CONTAINER.
+        # "mere data ka overview do" handled by strong (overview).
+        # Weak intent alone without strong intent:
+        return True
+
     return bool(OVERVIEW_PATTERN.match(q))
+
 
 
 def _handle_overview_request(

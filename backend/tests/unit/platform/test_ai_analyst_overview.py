@@ -32,6 +32,56 @@ def test_is_overview_request_detection():
     assert is_overview_request("How many orders were placed today?") is False
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is the total revenue?",
+        "Show revenue for the last 30 days",
+        "sales overview last 30 days (revenue, orders, AOV, top products by category)",
+        "refund rate last month",
+        "compare revenue between channels",
+        "top 5 products",
+        "orders by day",
+        "why did refunds spike in March",
+        "how many orders yesterday",
+        "revenue",
+        "orders",
+        "what is my AOV",
+        "show my store revenue",
+        "meri sales kitni hain",
+        "my orders",
+        "customers report",
+        "sales report",
+        None,
+    ],
+)
+def test_is_overview_request_must_stay_false(question):
+    assert is_overview_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "generate me a dashboard for my data",
+        "give me insights on my store",
+        "analyze my data",
+        "build me a report",
+        "how is my store doing",
+        "summarize my business",
+        "mera dashboard dikhao",
+        "mere data ka overview do",
+        "dashboard banao",
+        "show me an overview",
+        "store summary",
+        "business snapshot",
+        "please give me a dashboard",
+    ],
+)
+def test_is_overview_request_must_be_true(question):
+    assert is_overview_request(question) is True
+
+
+
 def _setup_mock_analyst(monkeypatch, raw_profile_data=None, query_results=None):
     fake_db = PostgresGateway.__new__(PostgresGateway)
     fake_llm = LLMClient.__new__(LLMClient)
