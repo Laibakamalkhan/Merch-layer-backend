@@ -15,6 +15,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
         "excluded_currencies": [],
         "note": None,
         "window": {"start_date": None, "end_date": None},
+        "previous_window": None,
+        "window_days": window_days,
     }
 
     if not profile or not profile.get("has_data"):
@@ -49,6 +51,16 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
 
     start_date = start_d.isoformat()
     end_date = end_d.isoformat()
+
+    prev_end_d = start_d - timedelta(days=1)
+    prev_start_d = prev_end_d - timedelta(days=max(0, window_days - 1))
+
+    previous_window: dict[str, str] | None = None
+    if first_date_str and prev_start_d >= first_d:
+        previous_window = {
+            "start_date": prev_start_d.isoformat(),
+            "end_date": prev_end_d.isoformat(),
+        }
 
     all_currencies = profile.get("currencies") or []
     excluded_currencies = sorted(
@@ -207,11 +219,40 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
         }
     )
 
+    if previous_window:
+        prev_start_date = previous_window["start_date"]
+        prev_end_date = previous_window["end_date"]
+        prev_kpi_sql = (
+            f"SELECT\n"
+            f"{kpi_select_str}\n"
+            f"FROM gold.daily_sales ds\n"
+            f"WHERE ds.tenant_id = :tenant_id\n"
+            f"  AND ds.currency_code = '{primary_curr}'\n"
+            f"  AND ds.metric_date >= '{prev_start_date}'\n"
+            f"  AND ds.metric_date <= '{prev_end_date}'"
+        )
+        candidate_recipes.append(
+            {
+                "id": "kpi_previous_period",
+                "title": f"Previous period KPIs ({primary_curr})",
+                "sql": prev_kpi_sql,
+                "requires": ["daily_sales"],
+                "chart": "kpi",
+                "columns": kpi_columns,
+                "x": None,
+                "y": None,
+                "internal": True,
+            }
+        )
+
     active_recipes = [
         r
         for r in candidate_recipes
         if all(available.get(req, False) for req in r["requires"])
     ]
+
+    if not any(r.get("id") == "kpi_previous_period" for r in active_recipes):
+        previous_window = None
 
     return {
         "recipes": active_recipes,
@@ -222,4 +263,6 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
             "start_date": start_date,
             "end_date": end_date,
         },
+        "previous_window": previous_window,
+        "window_days": window_days,
     }

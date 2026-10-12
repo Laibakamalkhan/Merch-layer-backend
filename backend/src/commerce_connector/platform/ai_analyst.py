@@ -597,6 +597,7 @@ def _handle_overview_request(
             "no_data": True,
             "data_range": dash_observed_range,
             "observed_data_range": dash_observed_range,
+            "previous_data_range": None,
         }
         saved_dashboard = db.save_dashboard_spec(
             tenant_id,
@@ -702,6 +703,9 @@ def _handle_overview_request(
         executed_sqls.append(guard_res.sql)
         successful_recipes.append(recipe_id)
 
+        if recipe.get("internal"):
+            continue
+
         chart_type = recipe.get("chart")
         recipe_cols = recipe.get("columns") or []
         recipe_x = recipe.get("x")
@@ -778,10 +782,68 @@ def _handle_overview_request(
 
         polished_kpis.append(updated_kpi)
 
+    # Previous period comparison enrichment
+    prev_window = recipe_result.get("previous_window")
+    prev_kpi_rows = recipe_rows_by_id.get("kpi_previous_period") or []
+    has_prev_comparison = bool(
+        "kpi_previous_period" in successful_recipes
+        and prev_kpi_rows
+        and prev_window
+        and prev_window.get("start_date")
+        and prev_window.get("end_date")
+    )
+
+    if has_prev_comparison:
+        final_dashboard["previous_data_range"] = {
+            "first_date": prev_window["start_date"],
+            "last_date": prev_window["end_date"],
+        }
+        prev_row = prev_kpi_rows[0]
+        window_days = recipe_result.get("window_days", 90)
+        comparison_label = f"vs previous {window_days} days"
+        target_kpi_metrics = {
+            "gross_sales": True,
+            "discounts": False,
+            "refunds": False,
+            "net_sales": True,
+            "orders_count": True,
+            "aov": True,
+        }
+        for kpi in polished_kpis:
+            metric_key = None
+            if kpi.get("column") in target_kpi_metrics:
+                metric_key = kpi.get("column")
+            elif kpi.get("id") in target_kpi_metrics:
+                metric_key = kpi.get("id")
+
+            if metric_key and metric_key in prev_row:
+                p = prev_row.get(metric_key)
+                c = kpi.get("value")
+
+                change_pct = None
+                if c is not None and p is not None:
+                    try:
+                        c_val = float(c)
+                        p_val = float(p)
+                        if p_val != 0.0:
+                            change_pct = round((c_val - p_val) / p_val * 100, 1)
+                    except (ValueError, TypeError, ZeroDivisionError, OverflowError):
+                        change_pct = None
+
+                kpi["previous_value"] = p
+                kpi["change_pct"] = change_pct
+                kpi["comparison"] = comparison_label
+                kpi["higher_is_better"] = target_kpi_metrics[metric_key]
+    else:
+        final_dashboard["previous_data_range"] = None
+
     final_dashboard["kpis"] = polished_kpis
 
     has_usable_widgets = bool(final_dashboard.get("kpis") or final_dashboard.get("charts"))
-    has_failures = bool(failed_recipes or (not recipes))
+    widget_recipes = [r for r in recipes if not r.get("internal")]
+    internal_recipe_ids = {r["id"] for r in recipes if r.get("internal")}
+    widget_failed_recipes = [r_id for r_id in failed_recipes if r_id not in internal_recipe_ids]
+    has_failures = bool(widget_failed_recipes or (not widget_recipes))
 
     # Case 1: Total recipe failure, or execution/guard failures occurred and zero usable widgets were produced
     if (not has_usable_widgets and has_failures) or (not verified_results and not recipes):
@@ -796,6 +858,7 @@ def _handle_overview_request(
             "no_data": False,
             "data_range": dash_recipe_range,
             "observed_data_range": dash_observed_range,
+            "previous_data_range": None,
         }
         saved_dashboard = db.save_dashboard_spec(
             tenant_id,
@@ -862,7 +925,7 @@ def _handle_overview_request(
         final_dashboard["no_data"] = True
         final_dashboard["kpis"] = []
         final_dashboard["charts"] = []
-    elif failed_recipes:
+    elif widget_failed_recipes:
         # Partial success: some recipes failed but other recipes produced verified usable widgets
         final_dashboard["partial"] = True
         if recipe_result.get("note"):
@@ -892,7 +955,7 @@ def _handle_overview_request(
             "successful_recipe_ids": successful_recipes,
             "failed_recipe_ids": failed_recipes,
             "result_shapes": [vr.shape for vr in verified_results],
-            "partial": bool(failed_recipes),
+            "partial": bool(widget_failed_recipes),
         },
     )
     if conversation_id:

@@ -605,4 +605,212 @@ def test_overview_refunds_summary_kpi_polish(monkeypatch):
     assert "refund_amount" not in kpis  # Since refunds was present in kpi_summary
 
 
+def test_overview_previous_period_comparison_enriched(monkeypatch):
+    """(c) overview with fake DB returning different KPI rows for current and previous window -> change_pct correct."""
+    from decimal import Decimal
+
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+
+    def custom_execute(sql, tid, **kw):
+        if "gold.daily_sales" in sql and "COALESCE(SUM(ds.gross_sales)" in sql:
+            # Tell the two windows apart by checking whether previous window's start date literal appears
+            if "2026-02-12" in sql:
+                return [
+                    {
+                        "gross_sales": Decimal("5000.0"),
+                        "discounts": Decimal("400.0"),
+                        "refunds": Decimal("300.0"),
+                        "net_sales": Decimal("4000.0"),
+                        "orders_count": 40,
+                        "units_sold": 80,
+                        "aov": Decimal("100.0"),
+                    }
+                ]
+            else:
+                return [
+                    {
+                        "gross_sales": Decimal("6000.0"),
+                        "discounts": Decimal("500.0"),
+                        "refunds": Decimal("500.0"),
+                        "net_sales": Decimal("5000.0"),
+                        "orders_count": 50,
+                        "units_sold": 100,
+                        "aov": Decimal("100.0"),
+                    }
+                ]
+        if "gold.daily_sales" in sql and "ds.metric_date" in sql:
+            return [
+                {"metric_date": "2026-08-09", "net_sales": 2500.0, "orders_count": 25},
+                {"metric_date": "2026-08-10", "net_sales": 2500.0, "orders_count": 25},
+            ]
+        if "gold.product_daily" in sql:
+            return [{"product": "Shirt", "category": "Apparel", "net_sales": 3000.0, "units_sold": 60}]
+        return []
+
+    monkeypatch.setattr(fake_db, "execute_readonly_query", custom_execute)
+
+    res = analyst.ask("tenant-123", "give me an overview")
+    dash = res["dashboard"]
+
+    # Comparison data range
+    assert dash["previous_data_range"] == {
+        "first_date": "2026-02-12",
+        "last_date": "2026-05-12",
+    }
+    assert dash.get("partial") is not True
+
+    # Validate KPI enrichment
+    kpis = {k["id"]: k for k in dash["kpis"]}
+
+    # net_sales: 5000 vs 4000 = 25.0%
+    assert kpis["net_sales"]["value"] == Decimal("5000.0")
+    assert kpis["net_sales"]["previous_value"] == Decimal("4000.0")
+    assert kpis["net_sales"]["change_pct"] == 25.0
+    assert kpis["net_sales"]["comparison"] == "vs previous 90 days"
+    assert kpis["net_sales"]["higher_is_better"] is True
+
+    # gross_sales: 6000 vs 5000 = 20.0%
+    assert kpis["gross_sales"]["change_pct"] == 20.0
+    assert kpis["gross_sales"]["higher_is_better"] is True
+
+    # discounts: 500 vs 400 = 25.0%
+    assert kpis["discounts"]["change_pct"] == 25.0
+    assert kpis["discounts"]["higher_is_better"] is False
+
+    # refunds: 500 vs 300 = 66.7%
+    assert kpis["refunds"]["change_pct"] == 66.7
+    assert kpis["refunds"]["higher_is_better"] is False
+
+    # orders_count: 50 vs 40 = 25.0%
+    assert kpis["orders_count"]["change_pct"] == 25.0
+    assert kpis["orders_count"]["higher_is_better"] is True
+
+    # aov: 100 vs 100 = 0.0%
+    assert kpis["aov"]["change_pct"] == 0.0
+    assert kpis["aov"]["higher_is_better"] is True
+
+    # Verify "internal" never appears in API response or dashboard dict
+    assert "internal" not in res
+    assert "internal" not in dash
+    for k in dash["kpis"]:
+        assert "internal" not in k
+    for c in dash["charts"]:
+        assert "internal" not in c
+
+
+def test_overview_previous_value_zero_or_non_numeric(monkeypatch):
+    """(d) previous value 0 or non-numeric -> change_pct None, no crash."""
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+
+    def custom_execute(sql, tid, **kw):
+        if "gold.daily_sales" in sql and "COALESCE(SUM(ds.gross_sales)" in sql:
+            if "2026-02-12" in sql:
+                return [
+                    {
+                        "gross_sales": 0.0,
+                        "discounts": None,
+                        "refunds": "not-a-number",
+                        "net_sales": 0,
+                        "orders_count": 0,
+                        "units_sold": 0,
+                        "aov": 0.0,
+                    }
+                ]
+            else:
+                return [
+                    {
+                        "gross_sales": 6000.0,
+                        "discounts": 500.0,
+                        "refunds": 500.0,
+                        "net_sales": 5000.0,
+                        "orders_count": 50,
+                        "units_sold": 100,
+                        "aov": 100.0,
+                    }
+                ]
+        if "gold.daily_sales" in sql and "ds.metric_date" in sql:
+            return [
+                {"metric_date": "2026-08-09", "net_sales": 2500.0, "orders_count": 25},
+                {"metric_date": "2026-08-10", "net_sales": 2500.0, "orders_count": 25},
+            ]
+        return []
+
+    monkeypatch.setattr(fake_db, "execute_readonly_query", custom_execute)
+
+    res = analyst.ask("tenant-123", "give me an overview")
+    dash = res["dashboard"]
+    kpis = {k["id"]: k for k in dash["kpis"]}
+
+    # Zero previous value -> change_pct is None, no division by zero
+    assert kpis["gross_sales"]["previous_value"] == 0.0
+    assert kpis["gross_sales"]["change_pct"] is None
+    assert kpis["gross_sales"]["comparison"] == "vs previous 90 days"
+    assert kpis["gross_sales"]["higher_is_better"] is True
+
+    # None previous value -> change_pct is None
+    assert kpis["discounts"]["previous_value"] is None
+    assert kpis["discounts"]["change_pct"] is None
+    assert kpis["discounts"]["higher_is_better"] is False
+
+    # Non-numeric previous value -> change_pct is None
+    assert kpis["refunds"]["change_pct"] is None
+    assert kpis["refunds"]["higher_is_better"] is False
+
+
+def test_overview_previous_recipe_failure_isolated(monkeypatch):
+    """(e) previous recipe fails -> KPIs still present without new keys; dashboard not partial, answer unchanged."""
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+
+    def failing_execute(sql, tid, **kw):
+        if "2026-02-12" in sql:
+            raise RuntimeError("Database error executing kpi_previous_period")
+        if "gold.daily_sales" in sql and "COALESCE(SUM(ds.gross_sales)" in sql:
+            return [
+                {
+                    "gross_sales": 6000.0,
+                    "discounts": 500.0,
+                    "refunds": 500.0,
+                    "net_sales": 5000.0,
+                    "orders_count": 50,
+                    "units_sold": 100,
+                    "aov": 100.0,
+                }
+            ]
+        if "gold.daily_sales" in sql and "ds.metric_date" in sql:
+            return [
+                {"metric_date": "2026-08-09", "net_sales": 2500.0, "orders_count": 25},
+                {"metric_date": "2026-08-10", "net_sales": 2500.0, "orders_count": 25},
+            ]
+        return []
+
+    monkeypatch.setattr(fake_db, "execute_readonly_query", failing_execute)
+
+    update_calls = []
+    monkeypatch.setattr(fake_db, "update_query_run", lambda run_id, **kw: update_calls.append(kw))
+
+    res = analyst.ask("tenant-123", "give me an overview")
+    dash = res["dashboard"]
+
+    # Dashboard must NOT have partial=True because of internal recipe failure
+    assert dash.get("partial") is not True
+    assert "sections could not be loaded" not in res["answer"].lower()
+    assert "verified dashboard overview" in res["answer"].lower()
+    assert dash["previous_data_range"] is None
+
+    # KPIs are present without comparison keys
+    assert len(dash["kpis"]) > 0
+    for kpi in dash["kpis"]:
+        assert "previous_value" not in kpi
+        assert "change_pct" not in kpi
+        assert "comparison" not in kpi
+        assert "higher_is_better" not in kpi
+
+    # Failure recorded in query run selected_context without partial flag
+    assert len(update_calls) == 1
+    assert update_calls[0]["status"] == "completed"
+    assert "kpi_previous_period" in update_calls[0]["selected_context"]["failed_recipe_ids"]
+    assert update_calls[0]["selected_context"]["partial"] is False
+
+
+
 

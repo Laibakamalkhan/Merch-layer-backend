@@ -27,7 +27,8 @@ def test_normal_profile():
 
     res = build_recipes(profile, window_days=90)
     recipe_ids = [r["id"] for r in res["recipes"]]
-    assert recipe_ids == ["kpi_summary", "revenue_trend", "orders_trend", "top_products"]
+    # kpi_previous_period is added as the 5th active recipe because data coverage covers previous window
+    assert recipe_ids == ["kpi_summary", "revenue_trend", "orders_trend", "top_products", "kpi_previous_period"]
     recipes_by_id = {r["id"]: r for r in res["recipes"]}
     assert recipes_by_id["revenue_trend"]["x"] == "metric_date"
     assert recipes_by_id["revenue_trend"]["y"] == "net_sales"
@@ -105,7 +106,8 @@ def test_sql_guard_validation():
     }
     res = build_recipes(profile)
     guard = SQLGuard()
-    assert len(res["recipes"]) == 5
+    # 6 recipes now including internal kpi_previous_period recipe
+    assert len(res["recipes"]) == 6
     for r in res["recipes"]:
         sql = r["sql"]
         assert ":tenant_id" in sql, f":tenant_id missing in {r['id']}"
@@ -189,4 +191,66 @@ def test_line_items_incomplete():
         assert not re.search(r"\bnow\s*\(", sql, re.IGNORECASE)
         check = guard.validate(sql)
         assert check.ok is True, f"SQLGuard failed for {r['id']}: {check.reason}\nSQL:\n{sql}"
+
+
+def test_previous_period_recipe_covered():
+    # (a) recipes: anchor 2026-08-10, first_date 2026-01-01, window 90 -> previous window 2026-02-12..2026-05-12 and SQL passes SQLGuard
+    profile = {
+        "has_data": True,
+        "primary_currency": "USD",
+        "currencies": ["USD"],
+        "anchor_date": "2026-08-10",
+        "date_range": {
+            "first_date": "2026-01-01",
+            "last_date": "2026-08-10",
+        },
+        "available": {
+            "daily_sales": True,
+            "products": True,
+            "refunds": False,
+        },
+    }
+    res = build_recipes(profile, window_days=90)
+    assert res["window"]["start_date"] == "2026-05-13"
+    assert res["window"]["end_date"] == "2026-08-10"
+    assert res["previous_window"] == {
+        "start_date": "2026-02-12",
+        "end_date": "2026-05-12",
+    }
+    prev_recipe = next((r for r in res["recipes"] if r["id"] == "kpi_previous_period"), None)
+    assert prev_recipe is not None
+    assert prev_recipe["internal"] is True
+    assert prev_recipe["chart"] == "kpi"
+    assert prev_recipe["requires"] == ["daily_sales"]
+    assert "'2026-02-12'" in prev_recipe["sql"]
+    assert "'2026-05-12'" in prev_recipe["sql"]
+    assert ":tenant_id" in prev_recipe["sql"]
+    assert "'USD'" in prev_recipe["sql"]
+
+    guard = SQLGuard()
+    check = guard.validate(prev_recipe["sql"])
+    assert check.ok is True, f"SQLGuard failed: {check.reason}"
+
+
+def test_previous_period_recipe_short_data_skipped():
+    # (b) first_date 2026-08-01 -> recipe skipped, previous_window None
+    profile = {
+        "has_data": True,
+        "primary_currency": "USD",
+        "currencies": ["USD"],
+        "anchor_date": "2026-08-10",
+        "date_range": {
+            "first_date": "2026-08-01",
+            "last_date": "2026-08-10",
+        },
+        "available": {
+            "daily_sales": True,
+            "products": True,
+            "refunds": False,
+        },
+    }
+    res = build_recipes(profile, window_days=90)
+    assert res["previous_window"] is None
+    assert not any(r["id"] == "kpi_previous_period" for r in res["recipes"])
+
 
