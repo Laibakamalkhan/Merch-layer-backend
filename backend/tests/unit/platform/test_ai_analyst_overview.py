@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from commerce_connector.platform.ai_analyst import AIAnalyst, is_overview_request
+from commerce_connector.platform.ai_analyst import (
+    AIAnalyst,
+    is_overview_request,
+    parse_overview_window,
+)
 from commerce_connector.platform.db import PostgresGateway
 from commerce_connector.platform.llm import LLMClient
 
@@ -52,6 +56,12 @@ def test_is_overview_request_detection():
         "my orders",
         "customers report",
         "sales report",
+        "revenue last 30 days",
+        "show revenue for the last 30 days",
+        "top products last month",
+        "orders by day this month",
+        "compare this month and last month",
+        "what is my revenue this month",
         None,
     ],
 )
@@ -75,6 +85,12 @@ def test_is_overview_request_must_stay_false(question):
         "store summary",
         "business snapshot",
         "please give me a dashboard",
+        "dashboard for last 30 days",
+        "how is my store doing this month",
+        "overview of the last 7 days",
+        "give me a summary of the last quarter",
+        "dashboard this year",
+        "mera dashboard last 30 days",
     ],
 )
 def test_is_overview_request_must_be_true(question):
@@ -810,6 +826,51 @@ def test_overview_previous_recipe_failure_isolated(monkeypatch):
     assert update_calls[0]["status"] == "completed"
     assert "kpi_previous_period" in update_calls[0]["selected_context"]["failed_recipe_ids"]
     assert update_calls[0]["selected_context"]["partial"] is False
+
+
+def test_parse_overview_window_anchored():
+    anchor = date(2026, 8, 10)
+    assert parse_overview_window("last 30 days", anchor) == 30
+    assert parse_overview_window("last 2 weeks", anchor) == 14
+    assert parse_overview_window("this month", anchor) == 10
+    assert parse_overview_window("ytd", anchor) == 222
+    assert parse_overview_window("last week", anchor) == 7
+    assert parse_overview_window("last 3 days", anchor) == 7  # clamped to min 7
+    assert parse_overview_window("hello", anchor) is None
+    # Crash-proof test with giant number: clamped before multiplying and final clamped to 366
+    assert parse_overview_window("dashboard last 99999999999 days", anchor) == 366
+    assert parse_overview_window(None, anchor) is None
+    assert parse_overview_window("last 30 days", None) is None
+    assert parse_overview_window("last 30 days", "invalid-date") is None
+
+
+def test_overview_integration_last_30_days(monkeypatch):
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+    res = analyst.ask("tenant-123", "dashboard for last 30 days", include_debug=True)
+
+    dash = res["dashboard"]
+    assert dash["window_days"] == 30
+    assert dash["data_range"]["first_date"] == "2026-07-12"
+    assert dash["data_range"]["last_date"] == "2026-08-10"
+
+    # Assert SQL date literals start at 2026-07-12 and end at 2026-08-10
+    assert len(fake_db.executed_queries) > 0
+    found_literals = False
+    for sql, tid in fake_db.executed_queries:
+        if "2026-07-12" in sql and "2026-08-10" in sql:
+            found_literals = True
+            break
+    assert found_literals is True
+
+
+def test_overview_integration_giant_window_still_builds(monkeypatch):
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+    res = analyst.ask("tenant-123", "dashboard last 99999999999 days", include_debug=True)
+
+    dash = res["dashboard"]
+    assert dash["window_days"] == 366
+    assert dash["no_data"] is False
+    assert len(dash["kpis"]) > 0
 
 
 

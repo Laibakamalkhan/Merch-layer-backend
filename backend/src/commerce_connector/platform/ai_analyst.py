@@ -446,18 +446,37 @@ OVERVIEW_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_SPECIFIC_QUESTION_KEYWORDS = re.compile(
+_NON_TIME_SPECIFIC_KEYWORDS = re.compile(
     r"\b("
     r"why|how\s+many|what\s+is|what\s+was|which|compare|breakdown|highest|lowest|"
     r"top(?:\s+\d+)?|bottom|best|worst|versus|vs\b|refund\s+rate|aov\b|average\s+order|"
     r"growth|increase|decrease|forecast|predict|"
     r"by|per|grouped(?:\s+by)?|trend(?:\s+of)?|"
+    r"kitni|kitna|kitne|kyun|kyon|kab|konsa|kaunsa|sab\s+se|sabse"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_TIME_WINDOW_PATTERN = re.compile(
+    r"\b("
     r"yesterday|today|ytd|mtd|"
     r"(?:last|past|previous|this|next)\s+(?:week|month|quarter|year|\d+\s+days?)|"
     r"january|february|march|april|may|june|july|august|september|october|november|december|"
-    r"\b(?:19|20)\d{2}\b|"
-    r"kitni|kitna|kitne|kyun|kyon|kab|konsa|kaunsa|sab\s+se|sabse"
+    r"\b(?:19|20)\d{2}\b"
     r")\b",
+    re.IGNORECASE,
+)
+
+_PARSE_RELATIVE_WINDOW_PATTERN = re.compile(
+    r"\b(?:last|past|previous)\s+(\d+)\s+(days?|weeks?|months?|quarters?|years?)\b",
+    re.IGNORECASE,
+)
+_PARSE_NAMED_WINDOW_PATTERN = re.compile(
+    r"\b(?:last|past|previous)\s+(week|month|quarter|year)\b",
+    re.IGNORECASE,
+)
+_PARSE_THIS_WINDOW_PATTERN = re.compile(
+    r"\bthis\s+(month|week|year)\b|\bytd\b",
     re.IGNORECASE,
 )
 
@@ -491,6 +510,72 @@ _WEAK_INTENT_PATTERN = re.compile(
 _OVERVIEW_CONTAINER_PATTERN = re.compile(r"\b(dashboard|overview)\b", re.IGNORECASE)
 
 
+def parse_overview_window(question: str | None, anchor_date: Any) -> int | None:
+    try:
+        if not question or not isinstance(question, str):
+            return None
+        if not anchor_date:
+            return None
+
+        if isinstance(anchor_date, str):
+            anchor_dt = date.fromisoformat(anchor_date)
+        elif isinstance(anchor_date, datetime):
+            anchor_dt = anchor_date.date()
+        elif isinstance(anchor_date, date):
+            anchor_dt = anchor_date
+        else:
+            return None
+
+        q = question.lower()
+        days: int | None = None
+
+        m_rel = _PARSE_RELATIVE_WINDOW_PATTERN.search(q)
+        if m_rel:
+            num_raw = int(m_rel.group(1))
+            n = min(num_raw, 1000)
+            unit = m_rel.group(2).lower()
+            if unit.startswith("day"):
+                days = n * 1
+            elif unit.startswith("week"):
+                days = n * 7
+            elif unit.startswith("month"):
+                days = n * 30
+            elif unit.startswith("quarter"):
+                days = n * 90
+            elif unit.startswith("year"):
+                days = n * 365
+        else:
+            m_named = _PARSE_NAMED_WINDOW_PATTERN.search(q)
+            if m_named:
+                unit = m_named.group(1).lower()
+                if unit == "week":
+                    days = 7
+                elif unit == "month":
+                    days = 30
+                elif unit == "quarter":
+                    days = 90
+                elif unit == "year":
+                    days = 365
+            else:
+                m_this = _PARSE_THIS_WINDOW_PATTERN.search(q)
+                if m_this:
+                    match_str = m_this.group(0).lower()
+                    if match_str == "ytd" or "year" in match_str:
+                        days = anchor_dt.timetuple().tm_yday
+                    elif "month" in match_str:
+                        days = anchor_dt.day
+                    elif "week" in match_str:
+                        days = 7
+
+        if days is None:
+            return None
+
+        clamped = max(7, min(366, days))
+        return clamped
+    except Exception:
+        return None
+
+
 def is_overview_request(question: str) -> bool:
     if question is None:
         return False
@@ -507,8 +592,8 @@ def is_overview_request(question: str) -> bool:
     if not q_norm:
         return False
 
-    # Specific marker -> False
-    if _SPECIFIC_QUESTION_KEYWORDS.search(q_norm):
+    # Non-time specific marker -> False
+    if _NON_TIME_SPECIFIC_KEYWORDS.search(q_norm):
         return False
 
     # Existing exact generic phrases -> True
@@ -547,15 +632,17 @@ def is_overview_request(question: str) -> bool:
             return True
         return False
 
+    # Time-window phrase -> allowed only if a STRONG overview word is present and no metric word
+    if _TIME_WINDOW_PATTERN.search(q_norm):
+        if _STRONG_INTENT_PATTERN.search(q_norm) and not has_metric:
+            return True
+        return False
+
     # Strong / weak intent rule (when no metric word is present)
     if _STRONG_INTENT_PATTERN.search(q_norm):
         return True
 
     if _WEAK_INTENT_PATTERN.search(q_norm):
-        # Roman-Urdu / weak intent words combined with intent or action words
-        # E.g. "mera dashboard dikhao" handled by strong/OVERVIEW_CONTAINER.
-        # "mere data ka overview do" handled by strong (overview).
-        # Weak intent alone without strong intent:
         return True
 
     return bool(OVERVIEW_PATTERN.match(q))
@@ -598,6 +685,7 @@ def _handle_overview_request(
             "data_range": dash_observed_range,
             "observed_data_range": dash_observed_range,
             "previous_data_range": None,
+            "window_days": 90,
         }
         saved_dashboard = db.save_dashboard_spec(
             tenant_id,
@@ -650,7 +738,11 @@ def _handle_overview_request(
             }
         return response
 
-    recipe_result = build_recipes(profile)
+    anchor_dt_val = profile.get("anchor_date")
+    parsed_window = parse_overview_window(question, anchor_dt_val)
+    effective_window_days = int(parsed_window) if parsed_window is not None else 90
+
+    recipe_result = build_recipes(profile, window_days=effective_window_days)
     recipes = recipe_result.get("recipes") or []
     recipe_window = recipe_result.get("window") or {}
     window_start = recipe_window.get("start_date")
@@ -747,6 +839,7 @@ def _handle_overview_request(
     final_dashboard["currency"] = recipe_result.get("currency")
     final_dashboard["data_range"] = dash_recipe_range
     final_dashboard["observed_data_range"] = dash_observed_range
+    final_dashboard["window_days"] = effective_window_days
 
     # Polish overview dashboard KPIs
     raw_kpis = final_dashboard.get("kpis") or []
@@ -859,6 +952,7 @@ def _handle_overview_request(
             "data_range": dash_recipe_range,
             "observed_data_range": dash_observed_range,
             "previous_data_range": None,
+            "window_days": effective_window_days,
         }
         saved_dashboard = db.save_dashboard_spec(
             tenant_id,
@@ -919,6 +1013,9 @@ def _handle_overview_request(
             }
         return response
 
+    last_date_display = _format_human_date(window_end) or str(window_end or "")
+    window_suffix = f" Window: last {effective_window_days} days of your data (ending {last_date_display})." if last_date_display else ""
+
     # Case 2: Queries ran and validated cleanly without failures, but genuinely produced no usable data or widgets
     if not has_usable_widgets:
         answer = "No usable data was found for the selected overview window."
@@ -929,13 +1026,13 @@ def _handle_overview_request(
         # Partial success: some recipes failed but other recipes produced verified usable widgets
         final_dashboard["partial"] = True
         if recipe_result.get("note"):
-            answer = f"Here is the overview for your store (some sections could not be loaded). Note: {recipe_result['note']}"
+            answer = f"Here is the overview for your store (some sections could not be loaded). Note: {recipe_result['note']}{window_suffix}"
         else:
-            answer = "Here is the verified dashboard overview for your store. Note that some overview sections could not be loaded."
+            answer = f"Here is the verified dashboard overview for your store. Note that some overview sections could not be loaded.{window_suffix}"
     elif recipe_result.get("note"):
-        answer = f"Here is the overview for your store. Note: {recipe_result['note']}"
+        answer = f"Here is the overview for your store. Note: {recipe_result['note']}{window_suffix}"
     else:
-        answer = "Here is the verified dashboard overview for your store."
+        answer = f"Here is the verified dashboard overview for your store.{window_suffix}"
 
     saved_dashboard = db.save_dashboard_spec(
         tenant_id,
