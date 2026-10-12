@@ -635,7 +635,11 @@ def is_overview_request(question: str) -> bool:
     # Time-window phrase -> allowed only if a STRONG overview word is present and no metric word
     if _TIME_WINDOW_PATTERN.search(q_norm):
         if _STRONG_INTENT_PATTERN.search(q_norm) and not has_metric:
-            return True
+            try:
+                if parse_overview_window(question, date(2026, 1, 1)) is not None:
+                    return True
+            except Exception:
+                return False
         return False
 
     # Strong / weak intent rule (when no metric word is present)
@@ -1013,8 +1017,17 @@ def _handle_overview_request(
             }
         return response
 
+    try:
+        w_dict = recipe_result.get("window") or {}
+        w_start = date.fromisoformat(str(w_dict.get("start_date"))[:10])
+        w_end = date.fromisoformat(str(w_dict.get("end_date"))[:10])
+        actual_days = (w_end - w_start).days + 1
+    except Exception:
+        actual_days = effective_window_days
+
+    n = min(effective_window_days, actual_days)
     last_date_display = _format_human_date(window_end) or str(window_end or "")
-    window_suffix = f" Window: last {effective_window_days} days of your data (ending {last_date_display})." if last_date_display else ""
+    window_suffix = f" Window: last {n} days of your data (ending {last_date_display})." if last_date_display else ""
 
     # Case 2: Queries ran and validated cleanly without failures, but genuinely produced no usable data or widgets
     if not has_usable_widgets:

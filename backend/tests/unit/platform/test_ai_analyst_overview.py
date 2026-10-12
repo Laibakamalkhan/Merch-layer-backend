@@ -873,5 +873,77 @@ def test_overview_integration_giant_window_still_builds(monkeypatch):
     assert len(dash["kpis"]) > 0
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "dashboard for yesterday",
+        "dashboard for march",
+        "overview for 2025",
+        "dashboard for today",
+        "overview next month",
+    ],
+)
+def test_t4d_is_overview_request_must_be_false(question):
+    assert is_overview_request(question) is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "dashboard for last 30 days",
+        "overview of the last 2 weeks",
+        "dashboard this month",
+        "give me a summary of the last quarter",
+        "dashboard this year",
+        "dashboard",
+    ],
+)
+def test_t4d_is_overview_request_must_be_true(question):
+    assert is_overview_request(question) is True
+
+
+def test_overview_integration_partial_window_suffix(monkeypatch):
+    profile_20_days = {
+        "daily_sales": {
+            "first_date": "2026-07-22",
+            "last_date": "2026-08-10",
+            "rows": 20,
+            "currencies": [
+                {"currency_code": "USD", "orders_count_sum": 20, "net_sales_sum": 2000.0}
+            ],
+        },
+        "tables": {"daily_sales": 20, "products": 10, "refunds": 2},
+        "silver_orders": 20,
+        "orders_with_items": 20,
+    }
+    analyst, fake_db = _setup_mock_analyst(monkeypatch, raw_profile_data=profile_20_days)
+    res = analyst.ask("tenant-123", "dashboard for last 30 days")
+
+    assert "last 20 days" in res["answer"]
+    assert res["dashboard"]["window_days"] == 30
+
+
+def test_overview_integration_full_window_suffix(monkeypatch):
+    profile_200_days = {
+        "daily_sales": {
+            "first_date": "2026-01-01",
+            "last_date": "2026-08-10",
+            "rows": 200,
+            "currencies": [
+                {"currency_code": "USD", "orders_count_sum": 200, "net_sales_sum": 20000.0}
+            ],
+        },
+        "tables": {"daily_sales": 200, "products": 10, "refunds": 2},
+        "silver_orders": 200,
+        "orders_with_items": 200,
+    }
+    analyst, fake_db = _setup_mock_analyst(monkeypatch, raw_profile_data=profile_200_days)
+    res = analyst.ask("tenant-123", "dashboard for last 30 days")
+
+    assert "last 30 days" in res["answer"]
+    assert res["dashboard"]["window_days"] == 30
+
+
+
 
 
