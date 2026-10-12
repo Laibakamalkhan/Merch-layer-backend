@@ -1,10 +1,14 @@
 # Project rules (read first, keep answers short)
 - Stack: FastAPI + Supabase Postgres. Pipeline: Bronze -> Silver -> Gold.
-- Code lives in backend/src/commerce_connector/. Do NOT touch the frontend.
+- Code lives in backend\src\commerce_connector\ (platform code: src\commerce_connector\platform\). Do NOT touch the frontend.
 - The LLM never creates numbers. All numbers come from SQL results.
-- Every silver/gold query must filter by tenant_id. Never weaken sql_guard.py.
-- Files db.py (2000+ lines) and ai_analyst.py (1100+ lines) are huge:
-  use grep and read only needed line ranges. Never open them fully.
-- Work on ONE task per chat. Show a 5-line plan first, wait for my "go".
-- Run only the specific test file for the task, not the whole suite.
-- Do not commit or push. Windows PowerShell commands only.
+- Every silver/gold query must filter by tenant_id using bound parameters (%s), never f-strings. Never weaken sql_guard.py.
+- Never sum different currencies together.
+- Windows-safe code only (no strftime("%-d")). Windows PowerShell commands only.
+- db.py (2000+ lines) and ai_analyst.py (1100+ lines) are huge: use grep and line ranges. Never open them fully.
+- ONE task per chat. Show a 5-line plan first, wait for my "go".
+- Tests: run only the task's test file first, then whole tests\unit\platform.
+- If a test fails twice: STOP, report test name + last 15 lines of error, max 3 debug commands.
+- Do not edit existing tests unless you explain why.
+- Do not commit or push. I commit myself after reviewing the diff.
+- Reports: max 8 lines. Say what you RAN vs only READ, with exact pass/fail counts.
