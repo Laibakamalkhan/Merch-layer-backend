@@ -468,6 +468,40 @@ _SQL_CURRENT_DATE_WINDOW_PATTERN = re.compile(
     r"(?:\bcurrent_date\b|\bnow\s*\(|\bcurrent_timestamp\b|\blocaltimestamp\b)",
     re.IGNORECASE,
 )
+_NAMED_PARAM_PATTERN = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
+
+
+def _sanitize_sql_for_bind_params(sql: str) -> str:
+    """Strip SQL comments and single-quoted string literals before inspecting bind parameters."""
+    cleaned = re.sub(r"--[^\r\n]*", " ", sql)
+    cleaned = re.sub(r"/\*.*?\*/", " ", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"'(?:''|[^'])*'", " ", cleaned)
+    return cleaned
+
+
+def _enforce_allowed_bind_params(sql: str | None) -> None:
+    """Validate that only :tenant_id is used as a named bind parameter."""
+    if not sql or not isinstance(sql, str):
+        return
+    cleaned = _sanitize_sql_for_bind_params(sql)
+    found = _NAMED_PARAM_PATTERN.findall(cleaned)
+    invalid = sorted({name for name in found if name != "tenant_id"})
+    if invalid:
+        names_str = ", ".join(f":{name}" for name in invalid[:3])
+        raise _SubqueryValidationError(
+            f"Only the :tenant_id bind parameter is allowed; remove {names_str}."
+        )
+
+
+def _question_mentions_period(question: str | None) -> bool:
+    """Return True if the question mentions a time window or relative period."""
+    if not question or not isinstance(question, str):
+        return False
+    return bool(
+        _TIME_WINDOW_PATTERN.search(question)
+        or _RELATIVE_PERIOD_PATTERN.search(question)
+        or _QUESTION_TIME_WORDS_PATTERN.search(question)
+    )
 
 
 def _enforce_no_unrequested_date_window(question: str | None, sql: str | None) -> None:
@@ -477,11 +511,7 @@ def _enforce_no_unrequested_date_window(question: str | None, sql: str | None) -
             return
         if not sql or not isinstance(sql, str):
             return
-        if (
-            _TIME_WINDOW_PATTERN.search(question)
-            or _RELATIVE_PERIOD_PATTERN.search(question)
-            or _QUESTION_TIME_WORDS_PATTERN.search(question)
-        ):
+        if _question_mentions_period(question):
             return
         if _SQL_METRIC_DATE_PATTERN.search(sql) and _SQL_CURRENT_DATE_WINDOW_PATTERN.search(sql):
             raise _SubqueryValidationError(
@@ -493,6 +523,54 @@ def _enforce_no_unrequested_date_window(question: str | None, sql: str | None) -
         raise
     except Exception:
         return
+
+
+def _collect_sql_policy_violations(
+    question: str,
+    sql: str,
+    currencies: list[str] | None,
+) -> list[str]:
+    """Collect all policy violations across relative-date, currency, date-window, and bind parameters.
+
+    Fail open: never raises exceptions; swallows unexpected errors. Preserves deterministic order
+    and dedupes violations.
+    """
+    violations: list[str] = []
+
+    # 1. relative-date check
+    try:
+        _enforce_relative_date_filter(question, sql)
+    except _SubqueryValidationError as exc:
+        violations.append(str(exc))
+
+    # 2. currency check
+    try:
+        _enforce_single_currency(sql, currencies)
+    except _SubqueryValidationError as exc:
+        violations.append(str(exc))
+
+    # 3. no-unrequested-window check
+    try:
+        _enforce_no_unrequested_date_window(question, sql)
+    except _SubqueryValidationError as exc:
+        violations.append(str(exc))
+
+    # 4. bind-parameter check (fail-open)
+    try:
+        _enforce_allowed_bind_params(sql)
+    except _SubqueryValidationError as exc:
+        violations.append(str(exc))
+    except Exception:
+        pass
+
+    # Dedupe preserving insertion order
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for v in violations:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return deduped
 
 
 def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
@@ -518,6 +596,8 @@ def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
                 continue
             cleaned = code.strip().upper()
             if not cleaned or cleaned == "UNKNOWN":
+                continue
+            if not re.match(r"^[A-Z0-9]{2,8}$", cleaned):
                 continue
             codes.add(cleaned)
         return sorted(codes)
@@ -1425,20 +1505,44 @@ def _execute_subquery(
             "and dimensions for this sub-query."
         )
 
+    hints: list[str] = []
+    if len(currencies or []) > 1:
+        valid_hint_codes = sorted({c for c in (currencies or []) if c and re.match(r"^[A-Z0-9]{2,8}$", str(c).strip().upper()) and str(c).strip().upper() != "UNKNOWN"})
+        if len(valid_hint_codes) > 1:
+            codes_str = ", ".join(valid_hint_codes[:6])
+            hints.append(
+                f"This workspace has multiple currencies ({codes_str}). Every money total must GROUP BY currency_code or filter one currency_code; never add amounts across currencies."
+            )
+    if not _question_mentions_period(question):
+        hints.append(
+            "The question names no period: do not filter metric_date by CURRENT_DATE or NOW(); use all available data."
+        )
+    hints.append("The only allowed bind parameter is :tenant_id.")
+    planner_prompt += "\n\n" + "\n".join(hints)
+
     feedback = ""
     failed_sql = ""
+    error_history: list[str] = []
     last_failure_reason = ""
     last_failed_sql = ""
     for attempt in range(MAX_SUBQUERY_RETRIES + 1):
         prompt = planner_prompt
         if feedback:
-            prompt += (
+            retry_block = (
                 "\n\nValidation feedback for the previous attempt:\n"
                 f"Failed SQL:\n{failed_sql}\n"
                 f"Validation error:\n{feedback}\n"
                 "Correct the SQL for this sub-query. Do not remove required "
                 "tenant filters or bypass any validation."
             )
+            earlier_errors = [msg for msg in error_history if msg != feedback][-3:]
+            if earlier_errors:
+                earlier_block = (
+                    "\nEarlier errors that must STILL be avoided in the new SQL:\n"
+                    + "".join(f"- {msg}\n" for msg in earlier_errors)
+                )
+                retry_block += earlier_block
+            prompt += retry_block
         plan: dict[str, Any] = {}
         sql = ""
         intent: dict[str, Any] | None = None
@@ -1490,9 +1594,13 @@ def _execute_subquery(
                 )
                 raise _SubqueryValidationError(str(exc)) from exc
 
-            _enforce_relative_date_filter(question, sql)
-            _enforce_single_currency(sql, currencies)
-            _enforce_no_unrequested_date_window(question, sql)
+            violations = _collect_sql_policy_violations(question, sql, currencies)
+            if violations:
+                raise _SubqueryValidationError(
+                    " ".join(f"({i}) {m}" for i, m in enumerate(violations, 1))
+                    if len(violations) > 1
+                    else violations[0]
+                )
 
             if intent:
                 post_resolution = resolve_metrics(
@@ -1595,6 +1703,8 @@ def _execute_subquery(
                     tenant_id, attempt, type(exc).__name__, str(exc), sql
                 )
             feedback = str(exc)
+            if feedback not in error_history:
+                error_history.append(feedback)
             failed_sql = sql
             if attempt >= MAX_SUBQUERY_RETRIES:
                 return {
