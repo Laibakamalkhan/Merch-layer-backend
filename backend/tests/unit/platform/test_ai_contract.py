@@ -604,3 +604,40 @@ def test_empty_subquery_without_data_coverage(monkeypatch):
         "last_date": None,
     }
 
+
+def test_empty_subquery_returns_empty_rows_and_no_data(monkeypatch):
+    planner = lambda prompt: _metric_plan(_VALID_REAL_KPI_SQL, metric="net_sales")
+    llm_called = False
+    def final(prompt):
+        nonlocal llm_called
+        llm_called = True
+        return {}
+
+    # 1. All-null single row -> shape is "empty"
+    all_null_analyst = _new_multi_query_analyst(
+        monkeypatch,
+        planner,
+        final,
+        result_rows=[{"net_sales": None, "orders": None, "average_order_value": None}],
+    )
+    res_empty = all_null_analyst.ask("tenant-1", "What was revenue for April 2026?", include_debug=True)
+
+    assert res_empty["rows"] == []
+    assert res_empty["dashboard"]["no_data"] is True
+    assert res_empty["debug"]["row_count"] == 0
+
+    # 2. Normal non-empty single row -> returns rows and no_data is False
+    normal_analyst = _new_multi_query_analyst(
+        monkeypatch,
+        planner,
+        _multi_kpi_final,
+        result_rows=[{"net_sales": 500, "orders": 10, "average_order_value": 50}],
+    )
+    res_normal = normal_analyst.ask("tenant-1", "What was revenue for April 2026?", include_debug=True)
+
+    assert len(res_normal["rows"]) == 1
+    assert res_normal["rows"][0]["net_sales"] == 500
+    assert res_normal["dashboard"]["no_data"] is False
+    assert res_normal["debug"]["row_count"] == 1
+
+

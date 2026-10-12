@@ -865,7 +865,12 @@ def _complete_subquery_request(
     if not answer:
         answer = "I couldn't produce the requested analytics from the available verified data."
 
-    rows = [row for item in successful for row in item["rows"]]
+    rows = [
+        row
+        for item in successful
+        if item["verified"].shape != "empty"
+        for row in item["rows"]
+    ]
     sql = "\n\n".join(item["sql"] for item in successful)
     execution_ms = sum(item["execution_ms"] for item in successful)
     first_outcome = successful[0] if successful else (outcomes[0] if outcomes else {})
