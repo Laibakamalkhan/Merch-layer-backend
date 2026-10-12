@@ -28,6 +28,13 @@ def test_normal_profile():
     res = build_recipes(profile, window_days=90)
     recipe_ids = [r["id"] for r in res["recipes"]]
     assert recipe_ids == ["kpi_summary", "revenue_trend", "orders_trend", "top_products"]
+    recipes_by_id = {r["id"]: r for r in res["recipes"]}
+    assert recipes_by_id["revenue_trend"]["x"] == "metric_date"
+    assert recipes_by_id["revenue_trend"]["y"] == "net_sales"
+    assert recipes_by_id["orders_trend"]["x"] == "metric_date"
+    assert recipes_by_id["orders_trend"]["y"] == "orders_count"
+    assert recipes_by_id["top_products"]["x"] == "product"
+    assert recipes_by_id["top_products"]["y"] == "net_sales"
     assert res["window"]["start_date"] == "2026-05-13"
     assert res["window"]["end_date"] == "2026-08-10"
     assert res["currency"] == "USD"

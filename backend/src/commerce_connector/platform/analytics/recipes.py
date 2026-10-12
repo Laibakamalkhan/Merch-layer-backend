@@ -109,6 +109,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
             "requires": ["daily_sales"],
             "chart": "kpi",
             "columns": kpi_columns,
+            "x": None,
+            "y": None,
         },
         {
             "id": "revenue_trend",
@@ -128,6 +130,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
             "requires": ["daily_sales"],
             "chart": "line",
             "columns": ["metric_date", "net_sales"],
+            "x": "metric_date",
+            "y": "net_sales",
         },
         {
             "id": "orders_trend",
@@ -147,6 +151,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
             "requires": ["daily_sales"],
             "chart": "line",
             "columns": ["metric_date", "orders_count"],
+            "x": "metric_date",
+            "y": "orders_count",
         },
     ]
 
@@ -174,6 +180,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
                 "requires": ["products"],
                 "chart": "bar",
                 "columns": ["product", "category", "net_sales", "units_sold"],
+                "x": "product",
+                "y": "net_sales",
             }
         )
 
@@ -194,6 +202,8 @@ def build_recipes(profile: dict[str, Any] | None, window_days: int = 90) -> dict
             "requires": ["refunds"],
             "chart": "kpi",
             "columns": ["refund_count", "refund_amount"],
+            "x": None,
+            "y": None,
         }
     )
 

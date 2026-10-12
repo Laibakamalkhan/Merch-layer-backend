@@ -514,6 +514,7 @@ def _handle_overview_request(
         answer = "No data has been synced or uploaded for this workspace yet."
         empty_dashboard: dict[str, Any] = {
             "title": "Store Overview",
+            "currency": None,
             "kpis": [],
             "charts": [],
             "filters": [],
@@ -586,7 +587,7 @@ def _handle_overview_request(
     sql_guard = SQLGuard()
 
     sub_dashboards: list[dict[str, Any]] = []
-    all_rows: list[dict[str, Any]] = []
+    recipe_rows_by_id: dict[str, list[dict[str, Any]]] = {}
     executed_sqls: list[str] = []
     total_execution_ms = 0
     verified_results = []
@@ -619,12 +620,16 @@ def _handle_overview_request(
         verified_results.append(verified)
         rows = verified.as_dicts()
         if rows and verified.shape != "empty":
-            all_rows.extend(rows)
+            recipe_rows_by_id[recipe_id] = rows
+        else:
+            recipe_rows_by_id[recipe_id] = []
         executed_sqls.append(guard_res.sql)
         successful_recipes.append(recipe_id)
 
         chart_type = recipe.get("chart")
         recipe_cols = recipe.get("columns") or []
+        recipe_x = recipe.get("x")
+        recipe_y = recipe.get("y")
         llm_dash: dict[str, Any] = {
             "title": recipe.get("title") or "Overview Section",
             "kpis": [],
@@ -637,13 +642,15 @@ def _handle_overview_request(
                 for col in recipe_cols
             ]
         elif chart_type in {"line", "bar", "area"}:
-            if len(recipe_cols) >= 2:
+            chart_x = recipe_x if recipe_x else (recipe_cols[0] if len(recipe_cols) >= 1 else None)
+            chart_y = recipe_y if recipe_y else (recipe_cols[1] if len(recipe_cols) >= 2 else None)
+            if chart_x and chart_y:
                 llm_dash["charts"] = [
                     {
                         "type": chart_type,
                         "title": recipe.get("title") or "Trend",
-                        "x": recipe_cols[0],
-                        "y": recipe_cols[1],
+                        "x": chart_x,
+                        "y": chart_y,
                         "series": None,
                     }
                 ]
@@ -657,8 +664,45 @@ def _handle_overview_request(
 
     final_dashboard = _merge_dashboards(sub_dashboards)
     final_dashboard["title"] = "Store Overview"
+    final_dashboard["currency"] = recipe_result.get("currency")
     final_dashboard["data_range"] = dash_recipe_range
     final_dashboard["observed_data_range"] = dash_observed_range
+
+    # Polish overview dashboard KPIs
+    raw_kpis = final_dashboard.get("kpis") or []
+    has_refunds_kpi = any(k.get("id") == "refunds" for k in raw_kpis)
+    currency_formats = {"discounts", "refunds", "refund_amount", "gross_sales", "net_sales", "aov"}
+    integer_formats = {"orders_count", "refund_count", "units_sold"}
+    label_map = {
+        "aov": "Average Order Value",
+        "orders_count": "Orders",
+        "refund_count": "Refunds (count)",
+        "refund_amount": "Refund Amount",
+        "refunds": "Refunds (amount)",
+    }
+
+    polished_kpis: list[dict[str, Any]] = []
+    for kpi in raw_kpis:
+        kpi_id = str(kpi.get("id") or "")
+        # If the dashboard already has a KPI with id "refunds", drop the KPI with id "refund_amount"
+        if kpi_id == "refund_amount" and has_refunds_kpi:
+            continue
+
+        updated_kpi = dict(kpi)
+        col = updated_kpi.get("column") or updated_kpi.get("source_column") or kpi_id
+
+        if col in currency_formats or kpi_id in currency_formats:
+            updated_kpi["format"] = "currency"
+        elif col in integer_formats or kpi_id in integer_formats:
+            updated_kpi["format"] = "integer"
+
+        target_label = label_map.get(kpi_id) or label_map.get(str(col))
+        if target_label:
+            updated_kpi["label"] = target_label
+
+        polished_kpis.append(updated_kpi)
+
+    final_dashboard["kpis"] = polished_kpis
 
     has_usable_widgets = bool(final_dashboard.get("kpis") or final_dashboard.get("charts"))
     has_failures = bool(failed_recipes or (not recipes))
@@ -669,6 +713,7 @@ def _handle_overview_request(
         answer = "I couldn't produce the store overview because the overview queries failed validation or execution."
         empty_dashboard: dict[str, Any] = {
             "title": "Store Overview",
+            "currency": None,
             "kpis": [],
             "charts": [],
             "filters": [],
@@ -787,13 +832,35 @@ def _handle_overview_request(
             },
         )
 
+    # Build consistent daily rows by merging revenue_trend and orders_trend
+    if "revenue_trend" in successful_recipes and "orders_trend" in successful_recipes:
+        merged_by_date: dict[str, dict[str, Any]] = {}
+        for r in recipe_rows_by_id.get("revenue_trend") or []:
+            dt_raw = r.get("metric_date")
+            dt_str = str(dt_raw)[:10] if dt_raw is not None else ""
+            if dt_str:
+                merged_by_date.setdefault(dt_str, {"metric_date": dt_str})["net_sales"] = r.get("net_sales")
+
+        for r in recipe_rows_by_id.get("orders_trend") or []:
+            dt_raw = r.get("metric_date")
+            dt_str = str(dt_raw)[:10] if dt_raw is not None else ""
+            if dt_str:
+                merged_by_date.setdefault(dt_str, {"metric_date": dt_str})["orders_count"] = r.get("orders_count")
+
+        overview_rows = [
+            merged_by_date[dt_key]
+            for dt_key in sorted(merged_by_date.keys())
+        ]
+    else:
+        overview_rows = []
+
     response = {
         "conversation_id": conversation_id,
         "query_run_id": str(query_run_id),
         "answer": answer,
         "dashboard_id": str(saved_dashboard["id"]),
         "dashboard": final_dashboard,
-        "rows": all_rows,
+        "rows": overview_rows,
         "sql": combined_sql,
         "reasoning": reasoning,
         "route": None,
@@ -802,7 +869,7 @@ def _handle_overview_request(
         response["debug"] = {
             "sql": combined_sql,
             "execution_ms": total_execution_ms,
-            "row_count": len(all_rows),
+            "row_count": len(overview_rows),
             "route": None,
             "intent": {"type": "overview"},
             "result_shape": "grouped" if len(verified_results) > 1 else (verified_results[0].shape if verified_results else "empty"),

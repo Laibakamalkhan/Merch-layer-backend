@@ -128,10 +128,42 @@ def test_overview_routing_with_verified_data(monkeypatch):
     # 3. Verified numbers come strictly from DB
     dashboard = res["dashboard"]
     assert dashboard["no_data"] is False
+    assert dashboard["currency"] == "USD"
     kpis = {k["column"]: k["value"] for k in dashboard["kpis"]}
     assert kpis["net_sales"] == 5000.0
     assert kpis["orders_count"] == 50
     assert kpis["gross_sales"] == 6000.0
+
+    # KPI polish: formats, labels, duplicate drop
+    kpi_records = {k["id"]: k for k in dashboard["kpis"]}
+    assert "refund_amount" not in kpi_records  # Dropped because "refunds" is present
+    assert kpi_records["net_sales"]["format"] == "currency"
+    assert kpi_records["gross_sales"]["format"] == "currency"
+    assert kpi_records["discounts"]["format"] == "currency"
+    assert kpi_records["refunds"]["format"] == "currency"
+    assert kpi_records["refunds"]["label"] == "Refunds (amount)"
+    assert kpi_records["aov"]["format"] == "currency"
+    assert kpi_records["aov"]["label"] == "Average Order Value"
+    assert kpi_records["orders_count"]["format"] == "integer"
+    assert kpi_records["orders_count"]["label"] == "Orders"
+    assert kpi_records["units_sold"]["format"] == "integer"
+
+    # Charts check: top_products chart y_field == "net_sales" and data contains net_sales
+    charts = {c["id"]: c for c in dashboard["charts"]}
+    top_prod_chart = next(c for c in dashboard["charts"] if "top_products" in c["id"] or c["title"].startswith("Top products"))
+    assert top_prod_chart["x_field"] == "product"
+    assert top_prod_chart["y_field"] == "net_sales"
+    assert len(top_prod_chart["data"]) > 0
+    assert "net_sales" in top_prod_chart["data"][0]
+    assert top_prod_chart["data"][0]["net_sales"] == 3000.0
+
+    # Top-level rows: merged revenue_trend and orders_trend daily table
+    assert res["rows"] == [
+        {"metric_date": "2026-08-09", "net_sales": 2500.0, "orders_count": 25},
+        {"metric_date": "2026-08-10", "net_sales": 2500.0, "orders_count": 25},
+    ]
+    if "debug" in res:
+        assert res["debug"]["row_count"] == len(res["rows"])
 
     # 4. Data range reflects recipe query window, observed_data_range reflects observed profile dates
     assert dashboard["data_range"] == {
@@ -454,11 +486,73 @@ def test_overview_genuinely_empty_data_lifecycle(monkeypatch):
 
     dash = res["dashboard"]
     assert dash["no_data"] is True
+    assert dash["currency"] is None
     assert dash["kpis"] == []
     assert dash["charts"] == []
     assert "no data has been synced" in res["answer"].lower()
     assert len(update_calls) == 1
     assert update_calls[0]["status"] == "completed"
     assert update_calls[0]["selected_context"]["profile_has_data"] is False
+
+
+def test_overview_merged_rows_date_objects_and_strings(monkeypatch):
+    """When metric_date comes as date objects in one recipe and ISO strings in the other, rows merge correctly."""
+    analyst, fake_db = _setup_mock_analyst(monkeypatch)
+
+    def custom_execute(sql, tid, **kw):
+        if "gold.daily_sales" in sql and "ds.metric_date" in sql:
+            if "net_sales" in sql:
+                # revenue_trend returns Python date objects
+                return [
+                    {"metric_date": date(2026, 8, 10), "net_sales": 300.0},
+                    {"metric_date": date(2026, 8, 9), "net_sales": 200.0},
+                ]
+            if "orders_count" in sql:
+                # orders_trend returns ISO string representations
+                return [
+                    {"metric_date": "2026-08-09T00:00:00", "orders_count": 2},
+                    {"metric_date": "2026-08-10", "orders_count": 3},
+                ]
+        if "gold.daily_sales" in sql and "COALESCE(SUM(ds.gross_sales)" in sql:
+            return [{"gross_sales": 500.0, "discounts": 0.0, "refunds": 0.0, "net_sales": 500.0, "orders_count": 5, "units_sold": 5, "aov": 100.0}]
+        if "gold.product_daily" in sql:
+            return [{"product": "Widget", "category": "General", "net_sales": 500.0, "units_sold": 5}]
+        return []
+
+    monkeypatch.setattr(fake_db, "execute_readonly_query", custom_execute)
+
+    res = analyst.ask("tenant-123", "give me an overview", include_debug=True)
+
+    expected_rows = [
+        {"metric_date": "2026-08-09", "net_sales": 200.0, "orders_count": 2},
+        {"metric_date": "2026-08-10", "net_sales": 300.0, "orders_count": 3},
+    ]
+    assert res["rows"] == expected_rows
+    assert res["debug"]["row_count"] == 2
+    assert res["dashboard"]["currency"] == "USD"
+
+
+def test_overview_refunds_summary_kpi_polish(monkeypatch):
+    """Test refunds KPI polish: when refunds recipe runs, refund_count has label 'Refunds (count)' and format 'integer'."""
+    raw_profile = {
+        "daily_sales": {
+            "first_date": "2026-01-01",
+            "last_date": "2026-08-10",
+            "rows": 100,
+            "currencies": [{"currency_code": "USD", "orders_count_sum": 50, "net_sales_sum": 5000.0}],
+        },
+        "tables": {"daily_sales": 100, "products": 20, "refunds": 5},
+        "silver_orders": 50,
+        "orders_with_items": 50,
+    }
+    analyst, fake_db = _setup_mock_analyst(monkeypatch, raw_profile_data=raw_profile)
+    res = analyst.ask("tenant-123", "give me an overview")
+    dashboard = res["dashboard"]
+    kpis = {k["id"]: k for k in dashboard["kpis"]}
+    assert "refund_count" in kpis
+    assert kpis["refund_count"]["label"] == "Refunds (count)"
+    assert kpis["refund_count"]["format"] == "integer"
+    assert "refund_amount" not in kpis  # Since refunds was present in kpi_summary
+
 
 
