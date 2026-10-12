@@ -52,3 +52,7 @@ htmlcov/
 # Archives
 *.zip
 
+
+git-log.txt
+git-status.txt
+*_diff.txt
