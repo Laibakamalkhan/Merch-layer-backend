@@ -25,6 +25,8 @@ from commerce_connector.platform.analytics.visualization import (
 from commerce_connector.platform.analytics.result_validator import (
     validate_query_result,
 )
+from commerce_connector.platform.analytics.data_profile import build_data_profile
+from commerce_connector.platform.analytics.recipes import build_recipes
 from commerce_connector.platform.db import PostgresGateway
 from commerce_connector.platform.llm import LLMClient
 from commerce_connector.platform.rag import RagRetriever
@@ -437,6 +439,378 @@ def _format_human_date(val: Any) -> str | None:
         except Exception:
             return str(val)
     return str(val)
+
+
+OVERVIEW_PATTERN = re.compile(
+    r"^\s*(?:please\s+)?(?:can\s+you\s+)?(?:give\s+me\s+an?|show\s+(?:me\s+)?(?:my\s+|the\s+)?|generate\s+(?:me\s+)?(?:a\s+|an\s+)?|create\s+(?:me\s+)?(?:a\s+|an\s+)?|display\s+(?:my\s+|the\s+)?|summarize\s+(?:my\s+|the\s+)?|build\s+(?:me\s+)?(?:a\s+|an\s+)?)\s*(?:dashboard|overview|summary|stats|metrics)?(?:\s+(?:for\s+|of\s+)(?:my\s+|the\s+)?(?:data|store|sales|business|shop))?(?:\s+(?:please|now))?\s*[?.!]?\s*$",
+    re.IGNORECASE,
+)
+
+_SPECIFIC_QUESTION_KEYWORDS = re.compile(
+    r"\b(why|how\s+many|what\s+is|what\s+was|which|compare|breakdown|highest|lowest|top\s+\d+|versus|vs\b|refund\s+rate|aov\b|average\s+order)\b",
+    re.IGNORECASE,
+)
+
+
+def is_overview_request(question: str) -> bool:
+    q = (question or "").strip()
+    if not q:
+        return False
+    if _SPECIFIC_QUESTION_KEYWORDS.search(q):
+        return False
+    q_norm = re.sub(r"[^a-z0-9\s]", "", q.lower()).strip()
+    generic_phrases = {
+        "generate me a dashboard for my data",
+        "generate a dashboard for my data",
+        "generate dashboard for my data",
+        "generate me a dashboard",
+        "generate a dashboard",
+        "generate dashboard",
+        "show my dashboard",
+        "show the dashboard",
+        "show me my dashboard",
+        "show dashboard",
+        "give me an overview",
+        "give me overview",
+        "overview",
+        "overview of my data",
+        "summarize my data",
+        "summarise my data",
+        "summary of my data",
+        "summarize data",
+        "dashboard",
+        "my dashboard",
+    }
+    if q_norm in generic_phrases:
+        return True
+    return bool(OVERVIEW_PATTERN.match(q))
+
+
+def _handle_overview_request(
+    *,
+    db: PostgresGateway,
+    llm: LLMClient,
+    tenant_id: str,
+    query_run_id: str,
+    question: str,
+    conversation_id: str | None,
+    include_debug: bool,
+    reasoning: bool,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    raw_profile = db.get_data_profile_raw(tenant_id)
+    profile = build_data_profile(raw_profile)
+    date_range_info = profile.get("date_range") or {}
+    first_date_val = date_range_info.get("first_date")
+    last_date_val = date_range_info.get("last_date")
+
+    # Observed data coverage from tenant data profile
+    dash_observed_range = {
+        "first_date": first_date_val.isoformat() if hasattr(first_date_val, "isoformat") else (str(first_date_val) if first_date_val else None),
+        "last_date": last_date_val.isoformat() if hasattr(last_date_val, "isoformat") else (str(last_date_val) if last_date_val else None),
+    }
+
+    if not profile.get("has_data"):
+        answer = "No data has been synced or uploaded for this workspace yet."
+        empty_dashboard: dict[str, Any] = {
+            "title": "Store Overview",
+            "kpis": [],
+            "charts": [],
+            "filters": [],
+            "no_data": True,
+            "data_range": dash_observed_range,
+            "observed_data_range": dash_observed_range,
+        }
+        saved_dashboard = db.save_dashboard_spec(
+            tenant_id,
+            query_run_id,
+            "Store Overview",
+            answer,
+            empty_dashboard,
+        )
+        db.update_query_run(
+            query_run_id,
+            status="completed",
+            route=None,
+            intent={"type": "overview"},
+            selected_context={"recipes": [], "profile_has_data": False},
+        )
+        if conversation_id:
+            db.add_message(
+                tenant_id,
+                conversation_id,
+                "assistant",
+                answer,
+                {
+                    "query_run_id": str(query_run_id),
+                    "dashboard_id": str(saved_dashboard["id"]),
+                    "route": None,
+                },
+            )
+        response: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "query_run_id": str(query_run_id),
+            "answer": answer,
+            "dashboard_id": str(saved_dashboard["id"]),
+            "dashboard": empty_dashboard,
+            "rows": [],
+            "sql": "",
+            "reasoning": reasoning,
+            "route": None,
+        }
+        if include_debug:
+            response["debug"] = {
+                "sql": "",
+                "execution_ms": 0,
+                "row_count": 0,
+                "route": None,
+                "intent": {"type": "overview"},
+                "result_shape": "empty",
+                "already_aggregated": False,
+                "retrieved_context_ids": [],
+                "metric_codes": [],
+            }
+        return response
+
+    recipe_result = build_recipes(profile)
+    recipes = recipe_result.get("recipes") or []
+    recipe_window = recipe_result.get("window") or {}
+    window_start = recipe_window.get("start_date")
+    window_end = recipe_window.get("end_date")
+
+    dash_recipe_range = {
+        "first_date": window_start.isoformat() if hasattr(window_start, "isoformat") else (str(window_start) if window_start else dash_observed_range["first_date"]),
+        "last_date": window_end.isoformat() if hasattr(window_end, "isoformat") else (str(window_end) if window_end else dash_observed_range["last_date"]),
+    }
+
+    sql_guard = SQLGuard()
+
+    sub_dashboards: list[dict[str, Any]] = []
+    all_rows: list[dict[str, Any]] = []
+    executed_sqls: list[str] = []
+    total_execution_ms = 0
+    verified_results = []
+    failed_recipes: list[str] = []
+    successful_recipes: list[str] = []
+
+    for recipe in recipes:
+        recipe_id = recipe.get("id") or "unknown"
+        recipe_sql = recipe.get("sql") or ""
+        guard_res = sql_guard.validate(recipe_sql)
+        if not guard_res.ok:
+            failed_recipes.append(recipe_id)
+            continue
+
+        started = time.perf_counter()
+        try:
+            raw_rows = db.execute_readonly_query(guard_res.sql, tenant_id)
+        except Exception as exc:
+            logger.warning("Failed executing overview recipe %s: %s", recipe_id, exc)
+            failed_recipes.append(recipe_id)
+            continue
+        exec_ms = int((time.perf_counter() - started) * 1000)
+        total_execution_ms += exec_ms
+
+        verified = validate_query_result(raw_rows, max_rows=sql_guard.max_rows)
+        if not verified.ok:
+            failed_recipes.append(recipe_id)
+            continue
+
+        verified_results.append(verified)
+        rows = verified.as_dicts()
+        if rows and verified.shape != "empty":
+            all_rows.extend(rows)
+        executed_sqls.append(guard_res.sql)
+        successful_recipes.append(recipe_id)
+
+        chart_type = recipe.get("chart")
+        recipe_cols = recipe.get("columns") or []
+        llm_dash: dict[str, Any] = {
+            "title": recipe.get("title") or "Overview Section",
+            "kpis": [],
+            "charts": [],
+            "filters": [],
+        }
+        if chart_type == "kpi":
+            llm_dash["kpis"] = [
+                {"label": col.replace("_", " ").title(), "column": col, "aggregation": "value"}
+                for col in recipe_cols
+            ]
+        elif chart_type in {"line", "bar", "area"}:
+            if len(recipe_cols) >= 2:
+                llm_dash["charts"] = [
+                    {
+                        "type": chart_type,
+                        "title": recipe.get("title") or "Trend",
+                        "x": recipe_cols[0],
+                        "y": recipe_cols[1],
+                        "series": None,
+                    }
+                ]
+
+        sub_dash = build_verified_dashboard(
+            verified,
+            title=recipe.get("title") or "Overview Section",
+            llm_dashboard=llm_dash,
+        )
+        sub_dashboards.append(sub_dash)
+
+    final_dashboard = _merge_dashboards(sub_dashboards)
+    final_dashboard["title"] = "Store Overview"
+    final_dashboard["data_range"] = dash_recipe_range
+    final_dashboard["observed_data_range"] = dash_observed_range
+
+    has_usable_widgets = bool(final_dashboard.get("kpis") or final_dashboard.get("charts"))
+    has_failures = bool(failed_recipes or (not recipes))
+
+    # Case 1: Total recipe failure, or execution/guard failures occurred and zero usable widgets were produced
+    if (not has_usable_widgets and has_failures) or (not verified_results and not recipes):
+        error_msg = "Overview recipes failed validation or execution."
+        answer = "I couldn't produce the store overview because the overview queries failed validation or execution."
+        empty_dashboard: dict[str, Any] = {
+            "title": "Store Overview",
+            "kpis": [],
+            "charts": [],
+            "filters": [],
+            "no_data": False,
+            "data_range": dash_recipe_range,
+            "observed_data_range": dash_observed_range,
+        }
+        saved_dashboard = db.save_dashboard_spec(
+            tenant_id,
+            query_run_id,
+            "Store Overview",
+            answer,
+            empty_dashboard,
+        )
+        db.update_query_run(
+            query_run_id,
+            status="failed",
+            error_message=error_msg,
+            route=None,
+            intent={"type": "overview"},
+            selected_context={
+                "recipe_ids": [r["id"] for r in recipes],
+                "successful_recipe_ids": successful_recipes,
+                "failed_recipe_ids": failed_recipes,
+                "result_shapes": [vr.shape for vr in verified_results],
+                "failure": True,
+            },
+        )
+        if conversation_id:
+            db.add_message(
+                tenant_id,
+                conversation_id,
+                "assistant",
+                answer,
+                {
+                    "query_run_id": str(query_run_id),
+                    "dashboard_id": str(saved_dashboard["id"]),
+                    "route": None,
+                    "error": error_msg,
+                },
+            )
+        response: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "query_run_id": str(query_run_id),
+            "answer": answer,
+            "dashboard_id": str(saved_dashboard["id"]),
+            "dashboard": empty_dashboard,
+            "rows": [],
+            "sql": "\n\n".join(executed_sqls),
+            "reasoning": reasoning,
+            "route": None,
+        }
+        if include_debug:
+            response["debug"] = {
+                "sql": "\n\n".join(executed_sqls),
+                "execution_ms": total_execution_ms,
+                "row_count": 0,
+                "route": None,
+                "intent": {"type": "overview"},
+                "result_shape": "empty",
+                "already_aggregated": False,
+                "retrieved_context_ids": [],
+                "metric_codes": [],
+            }
+        return response
+
+    # Case 2: Queries ran and validated cleanly without failures, but genuinely produced no usable data or widgets
+    if not has_usable_widgets:
+        answer = "No usable data was found for the selected overview window."
+        final_dashboard["no_data"] = True
+        final_dashboard["kpis"] = []
+        final_dashboard["charts"] = []
+    elif failed_recipes:
+        # Partial success: some recipes failed but other recipes produced verified usable widgets
+        final_dashboard["partial"] = True
+        if recipe_result.get("note"):
+            answer = f"Here is the overview for your store (some sections could not be loaded). Note: {recipe_result['note']}"
+        else:
+            answer = "Here is the verified dashboard overview for your store. Note that some overview sections could not be loaded."
+    elif recipe_result.get("note"):
+        answer = f"Here is the overview for your store. Note: {recipe_result['note']}"
+    else:
+        answer = "Here is the verified dashboard overview for your store."
+
+    saved_dashboard = db.save_dashboard_spec(
+        tenant_id,
+        query_run_id,
+        "Store Overview",
+        answer,
+        final_dashboard,
+    )
+    combined_sql = "\n\n".join(executed_sqls)
+    db.update_query_run(
+        query_run_id,
+        status="completed",
+        route=None,
+        intent={"type": "overview"},
+        selected_context={
+            "recipe_ids": [r["id"] for r in recipes],
+            "successful_recipe_ids": successful_recipes,
+            "failed_recipe_ids": failed_recipes,
+            "result_shapes": [vr.shape for vr in verified_results],
+            "partial": bool(failed_recipes),
+        },
+    )
+    if conversation_id:
+        db.add_message(
+            tenant_id,
+            conversation_id,
+            "assistant",
+            answer,
+            {
+                "query_run_id": str(query_run_id),
+                "dashboard_id": str(saved_dashboard["id"]),
+                "route": None,
+            },
+        )
+
+    response = {
+        "conversation_id": conversation_id,
+        "query_run_id": str(query_run_id),
+        "answer": answer,
+        "dashboard_id": str(saved_dashboard["id"]),
+        "dashboard": final_dashboard,
+        "rows": all_rows,
+        "sql": combined_sql,
+        "reasoning": reasoning,
+        "route": None,
+    }
+    if include_debug:
+        response["debug"] = {
+            "sql": combined_sql,
+            "execution_ms": total_execution_ms,
+            "row_count": len(all_rows),
+            "route": None,
+            "intent": {"type": "overview"},
+            "result_shape": "grouped" if len(verified_results) > 1 else (verified_results[0].shape if verified_results else "empty"),
+            "already_aggregated": all(vr.already_aggregated for vr in verified_results) if verified_results else False,
+            "retrieved_context_ids": [],
+            "metric_codes": [],
+        }
+    return response
 
 
 def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1023,6 +1397,19 @@ class AIAnalyst:
         blocked = False
 
         try:
+            if is_overview_request(question):
+                return _handle_overview_request(
+                    db=self.db,
+                    llm=self.llm,
+                    tenant_id=tenant_id,
+                    query_run_id=str(query_run_id),
+                    question=question,
+                    conversation_id=conversation_id,
+                    include_debug=include_debug,
+                    reasoning=reasoning,
+                    user_id=user_id,
+                )
+
             retrieval_count = 15 if reasoning else 10
 
             context = self.retriever.retrieve(
