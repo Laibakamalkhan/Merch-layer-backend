@@ -2,7 +2,7 @@
 """T6 live check: asks 4 questions to a RUNNING backend and prints a SHORT summary.
 
 Run (PowerShell, from D:\\Internship-Proj2\\backend):
-  ..\\.venv\\Scripts\\python.exe scripts\\t6_live_questions.py --email you@example.com --tenant-id fcac7968-dcfe-4f2d-aa03-803ea1764d71
+  ..\\.venv\\Scripts\\python.exe scripts\\t6_live_questions.py --email you@example.com --tenant-id <id> [--q "question" --q "question2"]
 
 Password is asked in the terminal (hidden). Token is never printed.
 Each question uses 1 AI query from your limit.
@@ -72,7 +72,9 @@ def main() -> int:
     ap.add_argument("--email", required=True)
     ap.add_argument("--tenant-id", required=True)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--q", action="append", help="Your own question (repeat --q for several). Replaces the default 4.")
     args = ap.parse_args()
+    questions = [(f"custom {i + 1}", q) for i, q in enumerate(args.q)] if args.q else QUESTIONS
 
     pw = getpass.getpass("Password (hidden): ")
     c = httpx.Client(base_url=args.base_url, timeout=180)
@@ -92,7 +94,7 @@ def main() -> int:
         return 1
     cid = r.json()["id"]
 
-    for label, q in QUESTIONS:
+    for label, q in questions:
         r = c.post(f"{API}/conversations/{cid}/messages", json={"tenant_id": tid, "content": q})
         summarize(f"{label}: {q!r}", r)
 
