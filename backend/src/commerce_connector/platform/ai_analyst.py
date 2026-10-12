@@ -369,6 +369,88 @@ def _enforce_relative_date_filter(question: str, sql: str) -> None:
             )
 
 
+_CURRENCY_VERIFIED_TABLES = (
+    "channel_daily",
+    "customer_metrics",
+    "daily_sales",
+    "inventory_snapshot_daily",
+    "product_daily",
+    "refund_daily",
+    "customers",
+    "inventory_levels",
+    "order_items",
+    "orders",
+    "payments",
+    "product_variants",
+    "refund_items",
+    "refunds",
+)
+_CURRENCY_TABLES_PATTERN = re.compile(
+    r"\b(?:" + "|".join(sorted(_CURRENCY_VERIFIED_TABLES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+_MONEY_IDENTIFIER_PATTERN = re.compile(
+    r"(?:sales|revenue|amount|price|discount|refund|aov|cost|tax|shipping|total|spend|value|margin|profit)",
+    re.IGNORECASE,
+)
+_CURRENCY_CODE_PATTERN = re.compile(r"\bcurrency_code\b", re.IGNORECASE)
+
+
+def _enforce_single_currency(sql: str | None, currencies: list[str] | None) -> None:
+    """Validate that multi-currency workspaces do not add amounts across currencies without filtering/grouping by currency_code."""
+    if not sql or not isinstance(sql, str):
+        return
+    if not currencies or len(currencies) <= 1:
+        return
+    if not _CURRENCY_TABLES_PATTERN.search(sql):
+        return
+    sql_without_tables = _CURRENCY_TABLES_PATTERN.sub(" ", sql)
+    if not _MONEY_IDENTIFIER_PATTERN.search(sql_without_tables):
+        return
+    if _CURRENCY_CODE_PATTERN.search(sql):
+        return
+
+    valid_codes = sorted({c for c in currencies if c and str(c).strip().upper() != "UNKNOWN"})
+    if len(valid_codes) <= 1:
+        return
+    codes_str = ", ".join(valid_codes[:6])
+    raise _SubqueryValidationError(
+        f"This workspace has multiple currencies ({codes_str}). "
+        "SQL must GROUP BY currency_code or filter one currency_code; "
+        "never add amounts across currencies."
+    )
+
+
+def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
+    """Defensively extract list of distinct uppercase currency codes for tenant."""
+    try:
+        if not hasattr(db, "get_data_profile_raw"):
+            return []
+        profile = db.get_data_profile_raw(tenant_id)
+        if not isinstance(profile, dict):
+            return []
+        daily_sales = profile.get("daily_sales")
+        if not isinstance(daily_sales, dict):
+            return []
+        currencies_list = daily_sales.get("currencies")
+        if not isinstance(currencies_list, list):
+            return []
+        codes: set[str] = set()
+        for item in currencies_list:
+            if not isinstance(item, dict):
+                continue
+            code = item.get("currency_code")
+            if not isinstance(code, str):
+                continue
+            cleaned = code.strip().upper()
+            if not cleaned or cleaned == "UNKNOWN":
+                continue
+            codes.add(cleaned)
+        return sorted(codes)
+    except Exception:
+        return []
+
+
 def _build_subquery_tasks(
     question: str,
     resolution: Any,
@@ -1189,6 +1271,7 @@ def _execute_subquery(
     history_text: str,
     files_text: str,
     reasoning: bool,
+    currencies: list[str] | None = None,
 ) -> dict[str, Any]:
     permissions = snapshot.get("permissions") or []
     allowed = (
@@ -1294,6 +1377,7 @@ def _execute_subquery(
                 raise _SubqueryValidationError(str(exc)) from exc
 
             _enforce_relative_date_filter(question, sql)
+            _enforce_single_currency(sql, currencies)
 
             if intent:
                 post_resolution = resolve_metrics(
@@ -1422,6 +1506,7 @@ def _complete_subquery_request(
     reasoning: bool,
     conversation_id: str | None,
     include_debug: bool,
+    currencies: list[str] | None = None,
 ) -> dict[str, Any]:
     outcomes = [
         _execute_subquery(
@@ -1437,6 +1522,7 @@ def _complete_subquery_request(
             history_text=history_text,
             files_text=files_text,
             reasoning=reasoning,
+            currencies=currencies,
         )
         for task in tasks
     ]
@@ -1730,6 +1816,8 @@ class AIAnalyst:
                     user_id=user_id,
                 )
 
+            currencies = _extract_tenant_currencies(self.db, tenant_id)
+
             retrieval_count = 15 if reasoning else 10
 
             context = self.retriever.retrieve(
@@ -1826,6 +1914,7 @@ class AIAnalyst:
                 reasoning=reasoning,
                 conversation_id=conversation_id,
                 include_debug=include_debug,
+                currencies=currencies,
             )
 
         except Exception as exc:
