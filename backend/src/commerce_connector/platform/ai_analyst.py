@@ -1331,6 +1331,38 @@ def _merge_dashboards(dashboards: list[dict[str, Any]]) -> dict[str, Any]:
     return merged
 
 
+def _log_subquery_failure(
+    tenant_id: str,
+    attempt: int,
+    kind: str,
+    reason: str,
+    sql: str,
+) -> tuple[str, str]:
+    sanitized_reason = ""
+    sanitized_sql = ""
+    try:
+        r = str(reason or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        r = re.sub(r" +", " ", r).strip()
+        sanitized_reason = r[:300]
+
+        s = str(sql or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+        s = re.sub(r" +", " ", s).strip()
+        sanitized_sql = s[:400]
+
+        logger.warning(
+            "subquery attempt failed tenant=%s attempt=%s/%s kind=%s reason=%s sql=%s",
+            tenant_id,
+            attempt + 1,
+            MAX_SUBQUERY_RETRIES + 1,
+            kind,
+            sanitized_reason,
+            sanitized_sql,
+        )
+    except Exception:
+        pass
+    return sanitized_reason, sanitized_sql
+
+
 def _execute_subquery(
     *,
     llm: LLMClient,
@@ -1395,6 +1427,8 @@ def _execute_subquery(
 
     feedback = ""
     failed_sql = ""
+    last_failure_reason = ""
+    last_failed_sql = ""
     for attempt in range(MAX_SUBQUERY_RETRIES + 1):
         prompt = planner_prompt
         if feedback:
@@ -1419,6 +1453,9 @@ def _execute_subquery(
                     reasoning_effort="high" if reasoning else "low",
                 )
             except Exception as exc:
+                last_failure_reason, last_failed_sql = _log_subquery_failure(
+                    tenant_id, attempt, type(exc).__name__, str(exc), ""
+                )
                 logger.warning(
                     "LLM query plan generation failed for query_run_id=%s attempt=%s: %s",
                     query_run_id,
@@ -1448,6 +1485,9 @@ def _execute_subquery(
                     intent=intent,
                 )
             except RuntimeError as exc:
+                last_failure_reason, last_failed_sql = _log_subquery_failure(
+                    tenant_id, attempt, type(exc).__name__, str(exc), sql
+                )
                 raise _SubqueryValidationError(str(exc)) from exc
 
             _enforce_relative_date_filter(question, sql)
@@ -1486,6 +1526,9 @@ def _execute_subquery(
             try:
                 raw_rows = db.execute_readonly_query(guard.sql, tenant_id)
             except Exception as exc:
+                last_failure_reason, last_failed_sql = _log_subquery_failure(
+                    tenant_id, attempt, type(exc).__name__, str(exc), sql
+                )
                 logger.warning(
                     "Database readonly query execution failed for query_run_id=%s attempt=%s: %s",
                     query_run_id,
@@ -1547,6 +1590,10 @@ def _execute_subquery(
                 "resolution": scoped_resolution,
             }
         except _SubqueryValidationError as exc:
+            if exc.__cause__ is None:
+                last_failure_reason, last_failed_sql = _log_subquery_failure(
+                    tenant_id, attempt, type(exc).__name__, str(exc), sql
+                )
             feedback = str(exc)
             failed_sql = sql
             if attempt >= MAX_SUBQUERY_RETRIES:
@@ -1556,7 +1603,14 @@ def _execute_subquery(
                     "intent": intent,
                     "failure": True,
                     "resolution": scoped_resolution,
+                    "failure_reason": last_failure_reason,
+                    "failed_sql": last_failed_sql,
                 }
+        except Exception as exc:
+            _log_subquery_failure(
+                tenant_id, attempt, type(exc).__name__, str(exc), sql
+            )
+            raise
 
     raise AssertionError("Sub-query retry loop exited without a result")
 
