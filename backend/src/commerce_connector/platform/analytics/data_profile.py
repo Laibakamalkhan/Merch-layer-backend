@@ -117,6 +117,25 @@ def build_data_profile(raw: dict[str, Any] | None) -> dict[str, Any]:
         "inventory": _is_table_avail("inventory"),
     }
 
+    raw_silver_orders = raw.get("silver_orders")
+    try:
+        silver_orders = int(raw_silver_orders or 0)
+    except (ValueError, TypeError):
+        silver_orders = 0
+
+    raw_orders_with_items = raw.get("orders_with_items")
+    try:
+        orders_with_items = int(raw_orders_with_items or 0)
+    except (ValueError, TypeError):
+        orders_with_items = 0
+
+    if silver_orders > 0:
+        line_item_coverage = round(float(orders_with_items) / float(silver_orders), 3)
+    else:
+        line_item_coverage = None
+
+    line_items_ok = (line_item_coverage is not None and line_item_coverage >= 0.5)
+
     return {
         "has_data": has_data,
         "date_range": {
@@ -128,4 +147,6 @@ def build_data_profile(raw: dict[str, Any] | None) -> dict[str, Any]:
         "primary_currency": primary_currency,
         "multi_currency": multi_currency,
         "available": available,
+        "line_item_coverage": line_item_coverage,
+        "line_items_ok": line_items_ok,
     }

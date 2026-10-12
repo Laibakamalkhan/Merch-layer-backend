@@ -147,3 +147,39 @@ def test_bad_currency_injection():
     res = build_recipes(profile)
     assert res["recipes"] == []
     assert res["currency"] is None
+
+
+def test_line_items_incomplete():
+    profile = {
+        "has_data": True,
+        "primary_currency": "USD",
+        "currencies": ["USD", "CAD"],
+        "anchor_date": "2026-08-10",
+        "date_range": {"first_date": "2026-01-01", "last_date": "2026-08-10"},
+        "available": {
+            "daily_sales": True,
+            "products": True,
+            "refunds": True,
+        },
+        "line_items_ok": False,
+    }
+    res = build_recipes(profile)
+    recipe_ids = [r["id"] for r in res["recipes"]]
+    assert "top_products" not in recipe_ids
+    assert "kpi_summary" in recipe_ids
+
+    kpi = next(r for r in res["recipes"] if r["id"] == "kpi_summary")
+    assert "units_sold" not in kpi["columns"]
+    assert "units_sold" not in kpi["sql"]
+    assert "Product and units data is incomplete, so it is not shown." in (res["note"] or "")
+    assert "Excludes CAD" in (res["note"] or "")
+
+    guard = SQLGuard()
+    for r in res["recipes"]:
+        sql = r["sql"]
+        assert ":tenant_id" in sql
+        assert not re.search(r"\bcurrent_date\b", sql, re.IGNORECASE)
+        assert not re.search(r"\bnow\s*\(", sql, re.IGNORECASE)
+        check = guard.validate(sql)
+        assert check.ok is True, f"SQLGuard failed for {r['id']}: {check.reason}\nSQL:\n{sql}"
+

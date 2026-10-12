@@ -105,3 +105,38 @@ def test_multi_currency_and_unknown():
     assert profile["multi_currency"] is True
     # PKR (50000) > USD (1000), UNKNOWN last
     assert profile["currencies"] == ["PKR", "USD", "UNKNOWN"]
+
+
+def test_line_item_coverage():
+    # coverage 0.005 -> line_items_ok False
+    raw_low = {
+        "silver_orders": 1000,
+        "orders_with_items": 5,
+    }
+    p_low = build_data_profile(raw_low)
+    assert p_low["line_item_coverage"] == 0.005
+    assert p_low["line_items_ok"] is False
+
+    # coverage 1.0 -> line_items_ok True
+    raw_full = {
+        "silver_orders": 100,
+        "orders_with_items": 100,
+    }
+    p_full = build_data_profile(raw_full)
+    assert p_full["line_item_coverage"] == 1.0
+    assert p_full["line_items_ok"] is True
+
+    # silver_orders 0 -> coverage None, line_items_ok False
+    raw_zero = {
+        "silver_orders": 0,
+        "orders_with_items": 0,
+    }
+    p_zero = build_data_profile(raw_zero)
+    assert p_zero["line_item_coverage"] is None
+    assert p_zero["line_items_ok"] is False
+
+    # missing keys -> coverage None, line_items_ok False
+    p_missing = build_data_profile({})
+    assert p_missing["line_item_coverage"] is None
+    assert p_missing["line_items_ok"] is False
+

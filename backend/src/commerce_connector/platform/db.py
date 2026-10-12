@@ -649,6 +649,7 @@ class PostgresGateway:
                 "inventory": 0,
             },
             "silver_orders": 0,
+            "orders_with_items": 0,
         }
         try:
             ds_agg_sql = (
@@ -685,6 +686,10 @@ class PostgresGateway:
             silver_res = self.fetch_one(silver_orders_sql, (tid,)) or {}
             silver_orders_count = int(silver_res.get("cnt") or 0)
 
+            orders_items_sql = "select count(distinct order_id) as cnt from silver.order_items where tenant_id = %s"
+            items_res = self.fetch_one(orders_items_sql, (tid,)) or {}
+            orders_with_items_count = int(items_res.get("cnt") or 0)
+
             currencies_list = [
                 {
                     "currency_code": r.get("currency_code") or "UNKNOWN",
@@ -703,6 +708,7 @@ class PostgresGateway:
                 },
                 "tables": tables,
                 "silver_orders": silver_orders_count,
+                "orders_with_items": orders_with_items_count,
             }
         except Exception as exc:
             logger.warning("Failed to fetch data profile raw for tenant_id=%s: %s", tenant_id, exc)
