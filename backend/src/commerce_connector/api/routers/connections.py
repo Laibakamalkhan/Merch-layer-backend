@@ -29,7 +29,12 @@ router = APIRouter(prefix="/connections", tags=["Connections"])
 
 
 def _guard_connection(service, current_user: CurrentUser, connection_id: UUID):
-    connection = service.db.get_connection(connection_id)
+    try:
+        connection = service.db.get_connection(connection_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Connection not found") from exc
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Connection not found")
     require_tenant_access(service, current_user.id, str(connection["tenant_id"]))
     return connection
 
