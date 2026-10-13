@@ -573,12 +573,22 @@ def _collect_sql_policy_violations(
     return deduped
 
 
-def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
+_UNSET = object()
+
+
+def _extract_tenant_currencies(
+    db: Any,
+    tenant_id: str,
+    raw: Any = _UNSET,
+) -> list[str]:
     """Defensively extract list of distinct uppercase currency codes for tenant."""
     try:
-        if not hasattr(db, "get_data_profile_raw"):
-            return []
-        profile = db.get_data_profile_raw(tenant_id)
+        if raw is not _UNSET:
+            profile = raw
+        else:
+            if not hasattr(db, "get_data_profile_raw"):
+                return []
+            profile = db.get_data_profile_raw(tenant_id)
         if not isinstance(profile, dict):
             return []
         daily_sales = profile.get("daily_sales")
@@ -603,6 +613,37 @@ def _extract_tenant_currencies(db: Any, tenant_id: str) -> list[str]:
         return sorted(codes)
     except Exception:
         return []
+
+
+def _line_item_note(raw: Any) -> str | None:
+    """Return warning note if line item coverage is below threshold and valid."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        profile = build_data_profile(raw)
+    except Exception:
+        return None
+    if not isinstance(profile, dict):
+        return None
+    if profile.get("line_items_ok") is not False:
+        return None
+    coverage = profile.get("line_item_coverage")
+    if not isinstance(coverage, (int, float)) or isinstance(coverage, bool):
+        return None
+    pct = f"{round(coverage * 100, 1):.1f}%"
+    return (
+        f"Note: product-level figures are based on only {pct} of your orders "
+        f"(the rest have no product line items), so they are incomplete and "
+        f"should not be used for rankings or totals."
+    )
+
+
+def _references_product_tables(sql: str) -> bool:
+    """Check if SQL references product_daily or order_items as whole words."""
+    if not sql or not isinstance(sql, str):
+        return False
+    return bool(re.search(r"\b(product_daily|order_items)\b", sql, re.IGNORECASE))
+
 
 
 def _build_subquery_tasks(
@@ -1746,6 +1787,7 @@ def _complete_subquery_request(
     conversation_id: str | None,
     include_debug: bool,
     currencies: list[str] | None = None,
+    line_items_note: str | None = None,
 ) -> dict[str, Any]:
     outcomes = [
         _execute_subquery(
@@ -1880,6 +1922,14 @@ def _complete_subquery_request(
         notices.append(
             "Some requested analyses were omitted because this request is limited to four queries."
         )
+    if line_items_note:
+        has_product_ref = any(
+            _references_product_tables(item.get("sql", ""))
+            for item in successful
+            if getattr(item.get("verified"), "shape", None) != "empty"
+        )
+        if has_product_ref:
+            notices.append(line_items_note)
     answer = " ".join([*answers, *notices]).strip()
     if not answer:
         answer = "I couldn't produce the requested analytics from the available verified data."
@@ -2055,7 +2105,17 @@ class AIAnalyst:
                     user_id=user_id,
                 )
 
-            currencies = _extract_tenant_currencies(self.db, tenant_id)
+            raw = None
+            try:
+                if hasattr(self.db, "get_data_profile_raw"):
+                    res = self.db.get_data_profile_raw(tenant_id)
+                    if isinstance(res, dict):
+                        raw = res
+            except Exception:
+                raw = None
+
+            currencies = _extract_tenant_currencies(self.db, tenant_id, raw=raw)
+            line_items_note = _line_item_note(raw)
 
             retrieval_count = 15 if reasoning else 10
 
@@ -2154,6 +2214,7 @@ class AIAnalyst:
                 conversation_id=conversation_id,
                 include_debug=include_debug,
                 currencies=currencies,
+                line_items_note=line_items_note,
             )
 
         except Exception as exc:
