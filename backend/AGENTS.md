@@ -5,10 +5,14 @@
 - Every silver/gold query must filter by tenant_id using bound parameters (%s), never f-strings. Never weaken sql_guard.py.
 - Never sum different currencies together.
 - Windows-safe code only (no strftime("%-d")). Windows PowerShell commands only.
-- db.py (2000+ lines) and ai_analyst.py (1100+ lines) are huge: use grep and line ranges. Never open them fully.
+- db.py (2000+ lines) and ai_analyst.py (2200+ lines) are huge: use grep and line ranges. Never open them fully.
 - ONE task per chat. Show a 5-line plan first, wait for my "go".
 - Tests: run only the task's test file first, then whole tests\unit\platform.
 - If a test fails twice: STOP, report test name + last 15 lines of error, max 3 debug commands.
 - Do not edit existing tests unless you explain why.
 - Do not commit or push. I commit myself after reviewing the diff.
 - Reports: max 8 lines. Say what you RAN vs only READ, with exact pass/fail counts.
+- NEVER run git checkout, git restore, git reset, git stash, git clean, git add, git commit or git push. Allowed git: status --short, diff --stat, diff, log --oneline.
+- Always run tests from the backend folder with ..\.venv\Scripts\python.exe -m pytest (never plain python, never pip install).
+- Test order: the task's test file, then tests\unit\platform, then the whole project (pytest -q). The whole-project run is MANDATORY once.
+- Never read or print .env or any secret file.
