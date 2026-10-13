@@ -976,6 +976,34 @@ def test_t4e_overview_request_time_windows(question: str, expected: bool):
     assert is_overview_request(question) is expected
 
 
+def test_overview_answer_notes_separated_by_space(monkeypatch):
+    profile = {
+        "daily_sales": {
+            "first_date": "2026-01-01",
+            "last_date": "2026-08-10",
+            "rows": 100,
+            "currencies": [
+                {"currency_code": "USD", "orders_count_sum": 50, "net_sales_sum": 5000.0},
+                {"currency_code": "CAD", "orders_count_sum": 5, "net_sales_sum": 100.0},
+                {"currency_code": "EUR", "orders_count_sum": 5, "net_sales_sum": 200.0},
+                {"currency_code": "GBP", "orders_count_sum": 5, "net_sales_sum": 150.0},
+            ],
+        },
+        "tables": {"daily_sales": 100, "products": 20, "refunds": 5},
+        "silver_orders": 100,
+        "orders_with_items": 10,
+    }
+    analyst, _fake_db = _setup_mock_analyst(monkeypatch, raw_profile_data=profile)
+    answer = analyst.ask("tenant-123", "generate me a dashboard for my data")["answer"]
+
+    assert "soit" not in answer
+    assert "so it is not shown" in answer
+    assert "Window: last" in answer
+    for i, ch in enumerate(answer):
+        if ch == "." and i + 1 < len(answer):
+            assert answer[i + 1] == " "
+
+
 
 
 

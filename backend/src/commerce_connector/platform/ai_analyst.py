@@ -933,6 +933,22 @@ def is_overview_request(question: str) -> bool:
     return bool(OVERVIEW_PATTERN.match(q))
 
 
+def _join_overview_answer_parts(*parts: Any) -> str:
+    """Join overview answer fragments with a single space so words/sentences are never glued."""
+    chunks: list[str] = []
+    for part in parts:
+        if part is None:
+            continue
+        if isinstance(part, (list, tuple)):
+            chunks.extend(
+                str(item).strip() for item in part if item and str(item).strip()
+            )
+        else:
+            text = str(part).strip()
+            if text:
+                chunks.append(text)
+    return " ".join(chunks)
+
 
 def _handle_overview_request(
     *,
@@ -1308,7 +1324,12 @@ def _handle_overview_request(
 
     n = min(effective_window_days, actual_days)
     last_date_display = _format_human_date(window_end) or str(window_end or "")
-    window_suffix = f" Window: last {n} days of your data (ending {last_date_display})." if last_date_display else ""
+    window_suffix = (
+        f"Window: last {n} days of your data (ending {last_date_display})."
+        if last_date_display
+        else ""
+    )
+    recipe_note = recipe_result.get("note")
 
     # Case 2: Queries ran and validated cleanly without failures, but genuinely produced no usable data or widgets
     if not has_usable_widgets:
@@ -1319,14 +1340,31 @@ def _handle_overview_request(
     elif widget_failed_recipes:
         # Partial success: some recipes failed but other recipes produced verified usable widgets
         final_dashboard["partial"] = True
-        if recipe_result.get("note"):
-            answer = f"Here is the overview for your store (some sections could not be loaded). Note: {recipe_result['note']}{window_suffix}"
+        if recipe_note:
+            answer = _join_overview_answer_parts(
+                "Here is the overview for your store (some sections could not be loaded).",
+                "Note:",
+                recipe_note,
+                window_suffix,
+            )
         else:
-            answer = f"Here is the verified dashboard overview for your store. Note that some overview sections could not be loaded.{window_suffix}"
-    elif recipe_result.get("note"):
-        answer = f"Here is the overview for your store. Note: {recipe_result['note']}{window_suffix}"
+            answer = _join_overview_answer_parts(
+                "Here is the verified dashboard overview for your store.",
+                "Note that some overview sections could not be loaded.",
+                window_suffix,
+            )
+    elif recipe_note:
+        answer = _join_overview_answer_parts(
+            "Here is the overview for your store.",
+            "Note:",
+            recipe_note,
+            window_suffix,
+        )
     else:
-        answer = f"Here is the verified dashboard overview for your store.{window_suffix}"
+        answer = _join_overview_answer_parts(
+            "Here is the verified dashboard overview for your store.",
+            window_suffix,
+        )
 
     saved_dashboard = db.save_dashboard_spec(
         tenant_id,
