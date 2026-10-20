@@ -24,7 +24,11 @@ def models(current_user: CurrentUser = Depends(get_current_user)):
                 "supports_dashboards": True,
                 "available": bool(settings.groq_api_key),
                 "embedding_provider": settings.embedding_provider,
-                "embedding_model": settings.ollama_embedding_model,
+                "embedding_model": (
+                    settings.nvidia_embedding_model
+                    if settings.embedding_provider == "nvidia"
+                    else settings.ollama_embedding_model
+                ),
                 "embedding_dimensions": settings.embedding_dimensions,
             }
         ],

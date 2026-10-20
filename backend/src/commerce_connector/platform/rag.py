@@ -115,7 +115,7 @@ class SemanticIndexer:
                     "token_count": None,
                     "content_hash": _hash(content),
                     "embedding": vector_literal,
-                    "embedding_model": self.llm.ollama_embedding_model,
+                    "embedding_model": self.llm.embedding_model,
                     "metadata": doc.get("metadata") or {},
                 })
             if not prepared_chunks:
@@ -125,7 +125,7 @@ class SemanticIndexer:
 
     def index_document(self, tenant_id: str, document: dict[str, Any]) -> int:
         """Embed one existing ai.documents row without rebuilding the semantic catalog."""
-        embedding_model = self.llm.ollama_embedding_model
+        embedding_model = self.llm.embedding_model
         embedding_job = self.db.create_embedding_job(
             tenant_id,
             document["id"],
@@ -161,7 +161,7 @@ class SemanticIndexer:
         result = self.db.replace_semantic_documents_with_chunks(
             tenant_id,
             prepared,
-            embedding_model=self.llm.ollama_embedding_model,
+            embedding_model=self.llm.embedding_model,
             output_dimensions=self.llm.embedding_dimensions,
         )
         return result

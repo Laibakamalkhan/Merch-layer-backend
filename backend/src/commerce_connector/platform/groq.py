@@ -7,6 +7,12 @@ from typing import Any
 
 import httpx
 
+from commerce_connector.platform.nvidia_embeddings import (
+    DEFAULT_NVIDIA_BASE_URL,
+    DEFAULT_NVIDIA_EMBEDDING_MODEL,
+    NvidiaEmbeddingClient,
+)
+
 
 class GroqTransportError(RuntimeError):
     """Groq request could not establish/maintain an HTTP connection."""
@@ -28,7 +34,7 @@ class GroqAPIError(RuntimeError):
 
 
 class GroqClient:
-    """Groq generation client with the existing Ollama embedding backend."""
+    """Groq generation client. Embeddings use NVIDIA (hosted) or Ollama (local dev)."""
 
     API_ROOT = "https://api.groq.com/openai/v1"
 
@@ -42,10 +48,13 @@ class GroqClient:
         ollama_base_url: str = "http://localhost:11434",
         ollama_embedding_model: str = "embeddinggemma:latest",
         use_system_proxy: bool = False,
+        nvidia_api_key: str = "",
+        nvidia_base_url: str = DEFAULT_NVIDIA_BASE_URL,
+        nvidia_embedding_model: str = DEFAULT_NVIDIA_EMBEDDING_MODEL,
     ):
         self.api_key = api_key.strip()
         self.model = model.strip()
-        self.embedding_model = ""
+        self.embedding_model = ""  # set below to the active embedding model name
         self.embedding_dimensions = embedding_dimensions
         self.embedding_provider = (
             embedding_provider.strip().lower() or "ollama"
@@ -68,11 +77,23 @@ class GroqClient:
         if not self.model:
             raise ValueError("GROQ_MODEL must not be empty.")
 
-        if self.embedding_provider != "ollama":
+        if self.embedding_provider not in {"ollama", "nvidia"}:
             raise ValueError(
-                "Groq generation is separate from embeddings. "
-                "EMBEDDING_PROVIDER must remain 'ollama' for the existing RAG index."
+                "EMBEDDING_PROVIDER must be 'nvidia' or 'ollama'."
             )
+
+        self._nvidia: NvidiaEmbeddingClient | None = None
+        if self.embedding_provider == "nvidia":
+            self._nvidia = NvidiaEmbeddingClient(
+                nvidia_api_key,
+                model=nvidia_embedding_model,
+                base_url=nvidia_base_url,
+                dimensions=self.embedding_dimensions,
+                use_system_proxy=use_system_proxy,
+            )
+            self.embedding_model = self._nvidia.model
+        else:
+            self.embedding_model = self.ollama_embedding_model
 
     @staticmethod
     def _retry_delay(
@@ -526,6 +547,9 @@ class GroqClient:
             raise ValueError(
                 "Embedding task must be 'query' or 'document'."
             )
+
+        if self._nvidia is not None:
+            return self._nvidia.embed(text, task=task)
 
         return self._embed_ollama(
             text,

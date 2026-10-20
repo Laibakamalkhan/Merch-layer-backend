@@ -54,7 +54,13 @@ def main() -> int:
     print(f"  DATABASE_URL set : {bool(cfg.database_url)}")
     print(f"  GROQ_API_KEY   : {'set' if cfg.groq_api_key else 'MISSING'}")
     print(f"  Groq model     : {cfg.groq_model}")
-    print(f"  Embedding        : {cfg.embedding_provider} / {cfg.ollama_embedding_model} ({cfg.embedding_dimensions} dims)")
+    active_model = (
+        cfg.nvidia_embedding_model
+        if cfg.embedding_provider == "nvidia"
+        else cfg.ollama_embedding_model
+    )
+    print(f"  NVIDIA_API_KEY : {'set' if cfg.nvidia_api_key else 'MISSING'}")
+    print(f"  Embedding        : {cfg.embedding_provider} / {active_model} ({cfg.embedding_dimensions} dims)")
 
     print("\nStages")
     db = PostgresGateway(cfg.database_url)
@@ -66,6 +72,10 @@ def main() -> int:
         embedding_provider=cfg.embedding_provider,
         ollama_base_url=cfg.ollama_base_url,
         ollama_embedding_model=cfg.ollama_embedding_model,
+        use_system_proxy=cfg.groq_use_system_proxy,
+        nvidia_api_key=cfg.nvidia_api_key,
+        nvidia_base_url=cfg.nvidia_base_url,
+        nvidia_embedding_model=cfg.nvidia_embedding_model,
     )
     emb: list[float] = []
 
@@ -122,8 +132,33 @@ def main() -> int:
         return f"{docs} docs / {embedded} embedded chunks"
 
     ok &= step("6. RAG index is complete", _rag)
+
+    def _models():
+        rows = db.fetch_all(
+            """
+            select coalesce(c.embedding_model, '(null)') as model, count(*) as n
+            from ai.document_chunks c
+            where c.tenant_id=%s and c.embedding is not null
+            group by 1
+            order by 2 desc
+            """,
+            (args.tenant_id,),
+        )
+        if not rows:
+            return "no embedded chunks"
+        counts = {r["model"]: int(r["n"]) for r in rows}
+        summary = ", ".join(f"{m}={n}" for m, n in counts.items())
+        stale = [m for m in counts if m != gem.embedding_model]
+        if stale:
+            raise RuntimeError(
+                f"MIXED/OLD embeddings: {summary} (active model: {gem.embedding_model}). "
+                "Rebuild the catalog and reindex uploaded files before relying on search."
+            )
+        return summary
+
+    ok &= step("7. All chunks use the active embedding model", _models)
     if emb:
-        ok &= step("7. Vector search runs", lambda: f"{len(db.match_chunks(args.tenant_id, emb, count=3, min_similarity=None))} matches")
+        ok &= step("8. Vector search runs", lambda: f"{len(db.match_chunks(args.tenant_id, emb, count=3, min_similarity=None))} matches")
 
     print("\nAll stages passed." if ok else "\nFix the first FAIL above, then run again (set DEBUG_TRACE=1 for full traceback).")
     return 0 if ok else 1

@@ -123,6 +123,9 @@ class CommercePlatformService:
                 ollama_base_url=settings.ollama_base_url,
                 ollama_embedding_model=settings.ollama_embedding_model,
                 use_system_proxy=settings.groq_use_system_proxy,
+                nvidia_api_key=settings.nvidia_api_key,
+                nvidia_base_url=settings.nvidia_base_url,
+                nvidia_embedding_model=settings.nvidia_embedding_model,
             )
             self.indexer = SemanticIndexer(self.db, self.llm)
             self.analyst = AIAnalyst(self.db, self.llm)
