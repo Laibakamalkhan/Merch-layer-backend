@@ -78,7 +78,7 @@ def test_document_request_endpoint_payload_and_headers(monkeypatch):
     }
     assert call["headers"]["Authorization"] == f"Bearer {FAKE_KEY}"
     assert call["headers"]["Content-Type"] == "application/json"
-    assert call["timeout"] == 60.0
+    assert call["timeout"] == 15.0
     assert call["trust_env"] is False
 
 
@@ -234,6 +234,7 @@ def test_non_numeric_values_are_rejected(monkeypatch, bad_value):
     with pytest.raises(NvidiaEmbeddingError, match="non-numeric"):
         make_client().embed("x", task="query")
 
+
 @pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
 def test_nan_and_infinity_values_are_rejected(monkeypatch, bad_value):
     # json.dumps writes these as NaN / Infinity / -Infinity, which json.loads accepts.
@@ -249,6 +250,8 @@ def test_finite_values_including_zero_and_negatives_still_pass(monkeypatch):
     install_fake_post(monkeypatch, [FakeResponse(200, ok_body(vector))])
 
     assert make_client().embed("x", task="query") == vector
+
+
 def test_invalid_json_body_is_rejected(monkeypatch):
     install_fake_post(monkeypatch, [FakeResponse(200, "<html>gateway page</html>")])
 

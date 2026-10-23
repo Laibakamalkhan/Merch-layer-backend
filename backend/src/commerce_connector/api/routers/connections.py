@@ -28,6 +28,26 @@ def normalize_base_url(platform_code: str, url: str | None) -> str | None:
 router = APIRouter(prefix="/connections", tags=["Connections"])
 
 
+_SENSITIVE_KEY_MARKERS = ("secret", "token", "password", "api_key")
+
+
+def _is_sensitive_key(key: str) -> bool:
+    key_str = str(key).lower()
+    return any(marker in key_str for marker in _SENSITIVE_KEY_MARKERS)
+
+
+def _strip_sensitive_keys(data):
+    if isinstance(data, dict):
+        return {
+            k: _strip_sensitive_keys(v)
+            for k, v in data.items()
+            if not _is_sensitive_key(k)
+        }
+    if isinstance(data, list):
+        return [_strip_sensitive_keys(item) for item in data]
+    return data
+
+
 def _guard_connection(service, current_user: CurrentUser, connection_id: UUID):
     try:
         connection = service.db.get_connection(connection_id)
@@ -42,13 +62,13 @@ def _guard_connection(service, current_user: CurrentUser, connection_id: UUID):
 @router.get("")
 def list_connections(tenant_id: UUID, current_user: CurrentUser = Depends(get_current_user), service=Depends(get_service)):
     require_tenant_access(service, current_user.id, str(tenant_id))
-    return {"items": service.db.list_connections(tenant_id)}
+    return {"items": _strip_sensitive_keys(service.db.list_connections(tenant_id))}
 
 
 @router.get("/{connection_id}")
 def get_connection(connection_id: UUID, current_user: CurrentUser = Depends(get_current_user), service=Depends(get_service)):
     try:
-        return _guard_connection(service, current_user, connection_id)
+        return _strip_sensitive_keys(_guard_connection(service, current_user, connection_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

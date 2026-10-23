@@ -276,3 +276,81 @@ async def test_dataset_ingestion_anonymous_replace_semantics():
     assert len(db.silver_orders) == 1
     assert db.silver_orders[0]["source_id"] == "anon_000001"
     assert db.silver_orders[0]["gross_amount"] == 120.0
+
+
+class FakeIndexerSuccess:
+    def rebuild(self, tenant_id: str) -> dict[str, int]:
+        return {"documents": 5}
+
+
+class FakeIndexerRaising:
+    def rebuild(self, tenant_id: str) -> dict[str, int]:
+        raise RuntimeError("Embedder connection timeout")
+
+
+@pytest.mark.asyncio
+async def test_dataset_ingestion_rag_status_ok_on_rebuild_success():
+    db = FakeDB()
+    orchestrator = DatasetIngestionOrchestrator(db=db, bronze=FakeBronze(), silver=FakeSilver(db), gold=FakeGold(db))
+    tenant_id = str(uuid.uuid4())
+    dataset_id = str(uuid.uuid4())
+    db.datasets[dataset_id] = {
+        "id": dataset_id,
+        "tenant_id": tenant_id,
+        "filename": "orders.csv",
+        "file_type": "csv",
+        "storage_path": "path",
+        "status": "profiled",
+    }
+
+    raw_csv = b"order_id,amount,date\n101,50.00,2026-09-01"
+    res = await orchestrator.ingest_dataset(
+        tenant_id=tenant_id,
+        user_id="user_1",
+        dataset_id=dataset_id,
+        target_entity="orders",
+        column_mappings={"order_id": "source_id", "amount": "gross_amount", "date": "source_created_at"},
+        natural_key_column="order_id",
+        raw_file_bytes=raw_csv,
+        rebuild_rag_after_sync=True,
+        indexer=FakeIndexerSuccess(),
+    )
+    assert res["rag"] is not None
+    assert res["rag"]["status"] == "ok"
+    assert res["rag"]["details"] == {"documents": 5}
+    assert res["records_written"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dataset_ingestion_rag_status_failed_when_embedder_raises():
+    db = FakeDB()
+    orchestrator = DatasetIngestionOrchestrator(db=db, bronze=FakeBronze(), silver=FakeSilver(db), gold=FakeGold(db))
+    tenant_id = str(uuid.uuid4())
+    dataset_id = str(uuid.uuid4())
+    db.datasets[dataset_id] = {
+        "id": dataset_id,
+        "tenant_id": tenant_id,
+        "filename": "orders.csv",
+        "file_type": "csv",
+        "storage_path": "path",
+        "status": "profiled",
+    }
+
+    raw_csv = b"order_id,amount,date\n101,50.00,2026-09-01"
+    res = await orchestrator.ingest_dataset(
+        tenant_id=tenant_id,
+        user_id="user_1",
+        dataset_id=dataset_id,
+        target_entity="orders",
+        column_mappings={"order_id": "source_id", "amount": "gross_amount", "date": "source_created_at"},
+        natural_key_column="order_id",
+        raw_file_bytes=raw_csv,
+        rebuild_rag_after_sync=True,
+        indexer=FakeIndexerRaising(),
+    )
+    assert res["rag"] is not None
+    assert res["rag"]["status"] == "failed"
+    assert res["rag"]["error_type"] == "RuntimeError"
+    # Ensure ingestion data itself still succeeded and was not aborted
+    assert res["records_written"] == 1
+

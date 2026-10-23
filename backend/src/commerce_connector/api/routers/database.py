@@ -36,7 +36,22 @@ def _common_filters(
     }
 
 
+def _parent_scope_kwargs(spec: TableSpec, current_user_id: str) -> dict[str, Any]:
+    """Return gateway kwargs for parent-table ownership, or empty dict."""
+    if spec.parent_schema and spec.parent_table and spec.parent_fk:
+        return {
+            "owner_user_id": current_user_id,
+            "parent_schema": spec.parent_schema,
+            "parent_table": spec.parent_table,
+            "parent_fk": spec.parent_fk,
+            "parent_user_column": spec.parent_user_column,
+        }
+    return {}
+
+
 def _translate_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ValueError):
@@ -83,6 +98,8 @@ def query_table(schema: str, table: str, payload: TableQueryRequest, current_use
             require_tenant_access(service, current_user.id, str(tenant_id))
         if spec.scope == "user":
             user_id = UUID(current_user.id)
+        if spec.parent_schema:
+            user_id = None
         items = service.db.read_frontend_table(
             schema=spec.schema,
             table=spec.table,
@@ -98,6 +115,7 @@ def query_table(schema: str, table: str, payload: TableQueryRequest, current_use
             offset=payload.offset,
             order_by=payload.order_by,
             order_dir=payload.order_dir,
+            **_parent_scope_kwargs(spec, current_user.id),
         )
         return {"table": spec.key, "items": items, "limit": payload.limit, "offset": payload.offset}
     except Exception as exc:
@@ -128,6 +146,8 @@ def _make_list_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 require_tenant_access(service, current_user.id, str(tenant_id))
             if spec.scope == "user":
                 user_id = UUID(current_user.id)
+            if spec.parent_schema:
+                user_id = None
             filters = _common_filters(
                 connection_id=connection_id,
                 job_id=job_id,
@@ -152,6 +172,7 @@ def _make_list_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 offset=offset,
                 order_by=order_by,
                 order_dir=order_dir,
+                **_parent_scope_kwargs(spec, current_user.id),
             )
             return {"table": spec.key, "items": items, "limit": limit, "offset": offset}
         except Exception as exc:
@@ -181,6 +202,8 @@ def _make_count_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 require_tenant_access(service, current_user.id, str(tenant_id))
             if spec.scope == "user":
                 user_id = UUID(current_user.id)
+            if spec.parent_schema:
+                user_id = None
             filters = _common_filters(
                 connection_id=connection_id,
                 job_id=job_id,
@@ -199,6 +222,7 @@ def _make_count_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 user_id=user_id,
                 filters=filters,
                 hidden_columns=spec.hidden_columns,
+                **_parent_scope_kwargs(spec, current_user.id),
             )
             return {"table": spec.key, "total": total}
         except Exception as exc:
@@ -225,6 +249,8 @@ def _make_detail_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 require_tenant_access(service, current_user.id, str(tenant_id))
             if spec.scope == "user":
                 user_id = UUID(current_user.id)
+            if spec.parent_schema:
+                user_id = None
             row = service.db.get_frontend_record(
                 schema=spec.schema,
                 table=spec.table,
@@ -236,6 +262,7 @@ def _make_detail_endpoint(spec: TableSpec) -> Callable[..., dict[str, Any]]:
                 hidden_columns=spec.hidden_columns,
                 large_columns=spec.large_columns,
                 include_large_fields=include_large_fields,
+                **_parent_scope_kwargs(spec, current_user.id),
             )
             if not row:
                 raise HTTPException(status_code=404, detail=f"Record not found in {spec.key}")

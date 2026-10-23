@@ -134,21 +134,23 @@ export const api = {
   // chat
   createConversation: (b) => request('/conversations', { method: 'POST', body: b }),
   sendMessage: (id, b) => request(`/conversations/${id}/messages`, { method: 'POST', body: b }),
-  // library / files / plan
+  // library / files / datasets / plan
   library: (tenant_id, q) => request('/library', { query: { tenant_id, q } }),
   files: (tenant_id) => request('/files', { query: { tenant_id } }),
+  datasets: (tenant_id, limit = 100, offset = 0) => request('/datasets', { query: { tenant_id, limit, offset } }),
   uploadFile: (tenant_id, file) => {
     const f = new FormData();
     f.append('tenant_id', tenant_id);
     f.append('upload', file);
     return request('/files/upload', { method: 'POST', form: f });
   },
-  uploadCSV: (tenant_id, file) => {
+  uploadDataset: (tenant_id, file) => {
     const f = new FormData();
     f.append('tenant_id', tenant_id);
     f.append('upload', file);
-    return request('/files/upload', { method: 'POST', form: f });
+    return request('/datasets/upload', { method: 'POST', form: f });
   },
+  ingestDataset: (dataset_id, b) => request(`/datasets/${dataset_id}/ingest`, { method: 'POST', body: b }),
   deleteFile: (id, tenant_id) => request(`/files/${id}`, { method: 'DELETE', query: { tenant_id } }),
   subscription: (tenant_id) => request('/subscription', { query: { tenant_id } }),
   // tables

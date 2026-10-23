@@ -257,10 +257,11 @@ def test_rag_default_min_similarity_is_0_20(monkeypatch):
 
     captured_kwargs = {}
 
-    def fake_match_chunks(tenant_id, embedding, count=8, min_similarity=None):
+    def fake_match_chunks(tenant_id, embedding, count=8, min_similarity=None, embedding_model=None):
         captured_kwargs["tenant_id"] = tenant_id
         captured_kwargs["count"] = count
         captured_kwargs["min_similarity"] = min_similarity
+        captured_kwargs["embedding_model"] = embedding_model
         return [{"chunk_id": "c1", "title": "Doc", "similarity": 0.85, "content": "Content"}]
 
     monkeypatch.setattr(fake_db, "match_chunks", fake_match_chunks)

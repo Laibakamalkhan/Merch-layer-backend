@@ -1,0 +1,21 @@
+product_id,title,vendor,product_type,status
+PROD-001,Classic Cotton T-Shirt,Acme Apparel,Clothing,active
+PROD-002,Slim Fit Denim Jeans,Denim Co,Clothing,active
+PROD-003,Waterproof Rain Jacket,Outdoors Pro,Outerwear,active
+PROD-004,Leather Bi-Fold Wallet,Crafts & Leather,Accessories,active
+PROD-005,Polarized Sunglasses,Shade Masters,Accessories,active
+PROD-006,Ceramic Coffee Mug 12oz,HomeGoods,Kitchen,active
+PROD-007,Stainless Steel Water Bottle,HydroFlow,Fitness,active
+PROD-008,Yoga Mat Non-Slip,ZenFitness,Fitness,active
+PROD-009,Wireless Bluetooth Earbuds,TechSound,Electronics,active
+PROD-010,Mechanical Keyboard RGB,KeyClicks,Electronics,active
+PROD-011,Gaming Mouse Ergonomic,KeyClicks,Electronics,active
+PROD-012,USB-C Fast Charging Cable,TechSound,Electronics,active
+PROD-013,Aroma Oil Diffuser,HomeAroma,Home,active
+PROD-014,Scented Lavender Candle,HomeAroma,Home,active
+PROD-015,Canvas Minimalist Backpack,PackIt,Bags,active
+PROD-016,Thermal Running Gloves,ZenFitness,Clothing,active
+PROD-017,Wool Knit Winter Beanie,Acme Apparel,Clothing,active
+PROD-018,Organic Cotton Socks 3-Pack,Acme Apparel,Clothing,active
+PROD-019,Smart LED Desk Lamp,BrightLife,Electronics,active
+PROD-020,Bamboo Fiber Cutting Board,HomeGoods,Kitchen,active

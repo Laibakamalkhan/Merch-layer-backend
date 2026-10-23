@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from typing import Any
 
 from commerce_connector.platform.db import PostgresGateway
@@ -97,17 +98,24 @@ class SemanticIndexer:
 
         Agar embedding provider fail ho jaye to old working RAG index intact rehta hai.
         """
+        total_chunks = sum(len(_chunks(d["content"])) for d in docs)
+        chunk_idx = 0
         prepared: list[dict[str, Any]] = []
         for doc in docs:
             prepared_chunks: list[dict[str, Any]] = []
             for index, content in enumerate(_chunks(doc["content"])):
                 if not content.strip():
                     continue
+                chunk_idx += 1
+                t0 = time.perf_counter()
                 embedding = self.llm.embed(
                     content,
                     task="document",
                     title=doc["title"],
                 )
+                elapsed = time.perf_counter() - t0
+                print(f"[{chunk_idx}/{total_chunks}] embedded '{doc['title']}' in {elapsed:.1f}s", flush=True)
+                time.sleep(0.6)  # Pacing delay to avoid provider burst rate-limits
                 vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
                 prepared_chunks.append({
                     "chunk_index": index,
@@ -138,6 +146,7 @@ class SemanticIndexer:
                 if not content.strip():
                     continue
                 embedding = self.llm.embed(content, task="document", title=document.get("title"))
+                time.sleep(0.6)  # Pacing delay to avoid provider burst rate-limits
                 vector_literal = "[" + ",".join(f"{v:.10g}" for v in embedding) + "]"
                 chunks.append({
                     "chunk_index": index,
@@ -174,5 +183,12 @@ class RagRetriever:
 
     def retrieve(self, tenant_id: str, question: str, count: int = 8) -> list[dict[str, Any]]:
         embedding = self.llm.embed(question, task="query")
+        embedding_model = getattr(self.llm, "embedding_model", None)
         # Semantic catalog chhota hai; top-k recall ko similarity threshold se block na karein.
-        return self.db.match_chunks(tenant_id, embedding, count=count, min_similarity=0.20)
+        return self.db.match_chunks(
+            tenant_id,
+            embedding,
+            count=count,
+            min_similarity=0.20,
+            embedding_model=embedding_model,
+        )

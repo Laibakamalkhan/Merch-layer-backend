@@ -229,11 +229,16 @@ class DatasetIngestionOrchestrator:
 
             # Stage 4: Optional RAG Indexing
             rag_result = None
-            if rebuild_rag_after_sync and indexer:
-                try:
-                    rag_result = await asyncio.to_thread(indexer.rebuild, tenant_id)
-                except Exception as exc:
-                    logger.warning("RAG rebuild failed after dataset ingestion: %s", exc)
+            if rebuild_rag_after_sync:
+                if not indexer:
+                    rag_result = {"status": "failed", "error_type": "IndexerNotConfigured"}
+                else:
+                    try:
+                        rag_details = await asyncio.to_thread(indexer.rebuild, tenant_id)
+                        rag_result = {"status": "ok", "details": rag_details}
+                    except Exception as exc:
+                        logger.warning("RAG rebuild failed after dataset ingestion: %s", exc)
+                        rag_result = {"status": "failed", "error_type": type(exc).__name__}
 
             profile_summary = dataset.get("profile_summary") or {}
             quality_summary = {

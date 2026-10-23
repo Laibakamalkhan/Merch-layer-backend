@@ -179,14 +179,18 @@ class CommercePlatformService:
         if rebuild_rag_after_sync:
             if not self.indexer:
                 # Pehle yeh chup-chaap skip ho jata tha. Ab saaf likha aata hai ke kyun index nahi bana.
-                result["rag_error"] = "GROQ_API_KEY set nahi hai, isliye AI index nahi bana."
+                result["rag"] = {"status": "failed", "error_type": "IndexerNotConfigured"}
+                result["rag_error"] = "IndexerNotConfigured: GROQ_API_KEY set nahi hai, isliye AI index nahi bana."
             else:
                 try:
                     # to_thread: embedding ke sync HTTP calls poora server block na karein.
-                    result["rag"] = await asyncio.to_thread(self.indexer.rebuild, tenant_id)
+                    rag_details = await asyncio.to_thread(self.indexer.rebuild, tenant_id)
+                    result["rag"] = {"status": "ok", "details": rag_details}
                 except Exception as exc:  # sync ka data save ho chuka hai, RAG fail hone se sync fail na dikhe
+                    error_type = type(exc).__name__
                     logging.getLogger("commerce_connector.service").exception("RAG rebuild failed")
-                    result["rag_error"] = f"{type(exc).__name__}: {exc}"
+                    result["rag"] = {"status": "failed", "error_type": error_type}
+                    result["rag_error"] = f"{error_type}: {exc}"
         return result
 
     @staticmethod

@@ -5,6 +5,7 @@ import json
 import pytest
 
 import commerce_connector.platform.groq as groq_module
+from commerce_connector.platform.db import PostgresGateway
 from commerce_connector.platform.groq import GroqClient
 from commerce_connector.platform.rag import RagRetriever, SemanticIndexer
 
@@ -86,12 +87,13 @@ class FakeDB:
         }
         return {"documents": len(prepared)}
 
-    def match_chunks(self, tenant_id, embedding, count=8, min_similarity=None):
+    def match_chunks(self, tenant_id, embedding, count=8, min_similarity=None, embedding_model=None):
         self.match_args = {
             "tenant_id": tenant_id,
             "embedding": embedding,
             "count": count,
             "min_similarity": min_similarity,
+            "embedding_model": embedding_model,
         }
         return [{"content": "hit"}]
 
@@ -189,6 +191,47 @@ def test_rebuild_embedding_failure_never_touches_existing_index():
     assert "replace_semantic" not in db.events
 
 
+@pytest.mark.asyncio
+async def test_run_pipeline_rag_status_on_embedder_failure():
+    from unittest.mock import AsyncMock, MagicMock
+    from commerce_connector.platform.service import CommercePlatformService
+
+    service = MagicMock(spec=CommercePlatformService)
+    service.sync_engine = MagicMock()
+    service.sync_engine.run = AsyncMock(return_value={"job_id": "job-1", "status": "completed"})
+    service.indexer = MagicMock()
+    service.indexer.rebuild.side_effect = RuntimeError("nvidia embedding API timed out")
+
+    res = await CommercePlatformService.run_pipeline(
+        service,
+        tenant_id=TENANT_ID,
+        connection_ids=["conn-1"],
+        rebuild_rag_after_sync=True,
+    )
+    assert res["rag"] == {"status": "failed", "error_type": "RuntimeError"}
+    assert "rag_error" in res
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_rag_status_on_rebuild_success():
+    from unittest.mock import AsyncMock, MagicMock
+    from commerce_connector.platform.service import CommercePlatformService
+
+    service = MagicMock(spec=CommercePlatformService)
+    service.sync_engine = MagicMock()
+    service.sync_engine.run = AsyncMock(return_value={"job_id": "job-1", "status": "completed"})
+    service.indexer = MagicMock()
+    service.indexer.rebuild.return_value = {"documents": 3}
+
+    res = await CommercePlatformService.run_pipeline(
+        service,
+        tenant_id=TENANT_ID,
+        connection_ids=["conn-1"],
+        rebuild_rag_after_sync=True,
+    )
+    assert res["rag"] == {"status": "ok", "details": {"documents": 3}}
+
+
 # ---------------------------------------------------------------- retrieval
 
 
@@ -204,6 +247,7 @@ def test_retrieve_embeds_question_as_query_and_searches_with_vector():
         "embedding": [0.5, 0.25, 0.125, 1.0],
         "count": 5,
         "min_similarity": 0.20,
+        "embedding_model": ACTIVE_MODEL,
     }
 
 
@@ -246,3 +290,98 @@ def test_nvidia_indexing_uses_passage_and_retrieval_uses_query(monkeypatch):
         "nvidia/llama-nemotron-embed-vl-1b-v2"
     )
     assert len(db.match_args["embedding"]) == 768
+    assert (
+        db.match_args["embedding_model"]
+        == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    )
+
+
+# ---------------------------------------------------------------- model forwarding & PostgresGateway
+
+
+def test_retrieve_forwards_none_when_llm_has_no_embedding_model():
+    class MinimalLLM:
+        def embed(self, text, *, task="query", title=None):
+            return [0.1, 0.2, 0.3, 0.4]
+
+    db = FakeDB()
+    RagRetriever(db, MinimalLLM()).retrieve(TENANT_ID, "sales query")
+    assert db.match_args["embedding_model"] is None
+
+
+def test_postgres_gateway_match_chunks_sql_and_params(monkeypatch):
+    gateway = PostgresGateway.__new__(PostgresGateway)
+    captured = []
+
+    def fake_fetch_all(query, params):
+        captured.append({"query": query, "params": params})
+        return [{"chunk_id": "c1"}]
+
+    monkeypatch.setattr(gateway, "fetch_all", fake_fetch_all)
+
+    gateway.match_chunks(
+        "t-1",
+        [0.1, 0.2],
+        count=6,
+        min_similarity=0.30,
+        embedding_model="nvidia/llama-nemotron-embed-vl-1b-v2",
+    )
+    assert len(captured) == 1
+    q1, p1 = captured[0]["query"], captured[0]["params"]
+    assert "(%s::text is null or c.embedding_model=%s)" in q1
+    assert "c.tenant_id=%s" in q1
+    assert "d.tenant_id=%s" in q1
+    assert p1[1] == "t-1"
+    assert p1[2] == "t-1"
+    assert p1[3] == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert p1[4] == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert p1[5] == 0.30
+    assert p1[9] == 6
+
+    gateway.match_chunks("t-1", [0.1, 0.2])
+    assert len(captured) == 2
+    p2 = captured[1]["params"]
+    assert p2[3] is None
+    assert p2[4] is None
+
+
+def test_postgres_gateway_match_file_chunks_sql_and_params(monkeypatch):
+    gateway = PostgresGateway.__new__(PostgresGateway)
+    captured = []
+
+    def fake_fetch_all(query, params):
+        captured.append({"query": query, "params": params})
+        return [{"chunk_id": "c2"}]
+
+    monkeypatch.setattr(gateway, "fetch_all", fake_fetch_all)
+
+    assert gateway.match_file_chunks("t-1", "u-1", [], [0.1, 0.2]) == []
+    assert len(captured) == 0
+
+    gateway.match_file_chunks(
+        "t-1",
+        "u-1",
+        ["f-1"],
+        [0.1, 0.2],
+        count=5,
+        min_similarity=0.25,
+        embedding_model="nvidia/llama-nemotron-embed-vl-1b-v2",
+    )
+    assert len(captured) == 1
+    q1, p1 = captured[0]["query"], captured[0]["params"]
+    assert "(%s::text is null or c.embedding_model=%s)" in q1
+    assert "d.tenant_id=%s" in q1
+    assert "d.metadata->>'user_id'=%s" in q1
+    assert p1[1] == "t-1"
+    assert p1[2] == "u-1"
+    assert p1[3] == ["f-1"]
+    assert p1[4] == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert p1[5] == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert p1[7] == 0.25
+    assert p1[9] == 5
+
+    gateway.match_file_chunks("t-1", "u-1", ["f-1"], [0.1, 0.2])
+    assert len(captured) == 2
+    p2 = captured[1]["params"]
+    assert p2[4] is None
+    assert p2[5] is None

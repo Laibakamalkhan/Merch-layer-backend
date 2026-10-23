@@ -28,7 +28,7 @@ class NvidiaEmbeddingClient:
         model: str = DEFAULT_NVIDIA_EMBEDDING_MODEL,
         base_url: str = DEFAULT_NVIDIA_BASE_URL,
         dimensions: int = 768,
-        timeout: float = 60.0,
+        timeout: float = 15.0,
         max_attempts: int = 4,
         use_system_proxy: bool = False,
     ):

@@ -51,6 +51,7 @@ class GroqClient:
         nvidia_api_key: str = "",
         nvidia_base_url: str = DEFAULT_NVIDIA_BASE_URL,
         nvidia_embedding_model: str = DEFAULT_NVIDIA_EMBEDDING_MODEL,
+        nvidia_timeout: float | None = None,
     ):
         self.api_key = api_key.strip()
         self.model = model.strip()
@@ -84,11 +85,18 @@ class GroqClient:
 
         self._nvidia: NvidiaEmbeddingClient | None = None
         if self.embedding_provider == "nvidia":
+            if nvidia_timeout is None:
+                timeout_env = os.getenv("NVIDIA_TIMEOUT", "").strip()
+                timeout_val = float(timeout_env) if timeout_env else 60.0
+            else:
+                timeout_val = float(nvidia_timeout)
+
             self._nvidia = NvidiaEmbeddingClient(
                 nvidia_api_key,
                 model=nvidia_embedding_model,
                 base_url=nvidia_base_url,
                 dimensions=self.embedding_dimensions,
+                timeout=timeout_val,
                 use_system_proxy=use_system_proxy,
             )
             self.embedding_model = self._nvidia.model

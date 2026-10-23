@@ -12,8 +12,6 @@ from pathlib import Path
 PATTERNS = [
     (re.compile(r"gsk_[A-Za-z0-9]{20,}"), "Groq API key (gsk_...)"),
     (re.compile(r"nvapi-[A-Za-z0-9_-]{20,}"), "NVIDIA API key (nvapi-...)"),
-    (re.compile(r"nvapi-[A-Za-z0-9_-]{20,}"), "NVIDIA API key (nvapi-...)"),
-    (re.compile(r"nvapi-[A-Za-z0-9_-]{20,}"), "NVIDIA API key (nvapi-...)"),
     (re.compile(r"eyJhbGciOi[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "JWT token (eyJhbGci...)"),
     (re.compile(r"postgres(?:ql)?://(?!(?:USER:PASSWORD|user:password|<[^>]+>))[^:]+:[^@]+@", re.IGNORECASE), "PostgreSQL connection string with credentials"),
 ]

@@ -956,7 +956,14 @@ class PostgresGateway:
                     chunk_count += 1
         return {"documents": document_count, "chunks": chunk_count}
 
-    def match_chunks(self, tenant_id: str | UUID, embedding: list[float], count: int = 8, min_similarity: float | None = 0.35) -> list[dict[str, Any]]:
+    def match_chunks(
+        self,
+        tenant_id: str | UUID,
+        embedding: list[float],
+        count: int = 8,
+        min_similarity: float | None = 0.35,
+        embedding_model: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Match only shared semantic catalog chunks, never user-uploaded file chunks."""
         vector_literal = "[" + ",".join(f"{float(v):.10g}" for v in embedding) + "]"
         return self.fetch_all(
@@ -970,6 +977,7 @@ class PostgresGateway:
               and c.tenant_id=%s
               and d.tenant_id=%s
               and d.source_type in ('schema','metric','connection')
+              and (%s::text is null or c.embedding_model=%s)
               and (%s::double precision is null or (1-extensions.cosine_distance(c.embedding,%s::extensions.vector)) >= %s)
             order by extensions.cosine_distance(c.embedding,%s::extensions.vector)
             limit %s
@@ -978,6 +986,8 @@ class PostgresGateway:
                 vector_literal,
                 tenant_id,
                 tenant_id,
+                embedding_model,
+                embedding_model,
                 min_similarity,
                 vector_literal,
                 min_similarity,
@@ -994,6 +1004,7 @@ class PostgresGateway:
         embedding: list[float],
         count: int = 8,
         min_similarity: float = 0.20,
+        embedding_model: str | None = None,
     ) -> list[dict[str, Any]]:
         if not file_ids:
             return []
@@ -1010,11 +1021,23 @@ class PostgresGateway:
               and d.source_type='file'
               and d.metadata->>'user_id'=%s
               and d.id=any(%s::uuid[])
+              and (%s::text is null or c.embedding_model=%s)
               and (1-extensions.cosine_distance(c.embedding,%s::extensions.vector)) >= %s
             order by extensions.cosine_distance(c.embedding,%s::extensions.vector)
             limit %s
             """,
-            (vector_literal, tenant_id, str(user_id), [str(x) for x in file_ids], vector_literal, min_similarity, vector_literal, max(1, min(count, 30))),
+            (
+                vector_literal,
+                tenant_id,
+                str(user_id),
+                [str(x) for x in file_ids],
+                embedding_model,
+                embedding_model,
+                vector_literal,
+                min_similarity,
+                vector_literal,
+                max(1, min(count, 30)),
+            ),
         )
 
     def semantic_catalog_snapshot(self, tenant_id: str | UUID) -> dict[str, Any]:
@@ -1551,6 +1574,11 @@ class PostgresGateway:
         offset: int = 0,
         order_by: str | None = None,
         order_dir: str = "desc",
+        owner_user_id: str | UUID | None = None,
+        parent_schema: str | None = None,
+        parent_table: str | None = None,
+        parent_fk: str | None = None,
+        parent_user_column: str = "user_id",
     ) -> list[dict[str, Any]]:
         """Safely read one frontend-exposed table.
 
@@ -1598,6 +1626,30 @@ class PostgresGateway:
             conditions.append(sql.SQL("{col} = %s").format(col=sql.Identifier(user_column)))
             params.append(user_id)
 
+        # Parent-table ownership: enforce that the FK points to a parent row
+        # owned by the authenticated user (e.g. ai.messages -> ai.conversations).
+        if owner_user_id is not None and parent_schema and parent_table and parent_fk:
+            if parent_fk not in columns:
+                raise ValueError(f"Parent FK column {parent_fk!r} does not exist on {schema}.{table}")
+            conditions.append(
+                sql.SQL(
+                    "exists(select 1 from {pschema}.{ptable}"
+                    " where {pschema}.{ptable}.{pid} = {schema}.{table}.{fk}"
+                    " and {pschema}.{ptable}.{ucol} = %s"
+                    " and {pschema}.{ptable}.{tcol} = %s)"
+                ).format(
+                    pschema=sql.Identifier(parent_schema),
+                    ptable=sql.Identifier(parent_table),
+                    pid=sql.Identifier("id"),
+                    schema=sql.Identifier(schema),
+                    table=sql.Identifier(table),
+                    fk=sql.Identifier(parent_fk),
+                    ucol=sql.Identifier(parent_user_column),
+                    tcol=sql.Identifier(tenant_column),
+                )
+            )
+            params.extend([owner_user_id, tenant_id])
+
         for key, value in (filters or {}).items():
             if value is None:
                 continue
@@ -1641,6 +1693,11 @@ class PostgresGateway:
         user_id: str | UUID | None = None,
         filters: dict[str, Any] | None = None,
         hidden_columns: Sequence[str] = (),
+        owner_user_id: str | UUID | None = None,
+        parent_schema: str | None = None,
+        parent_table: str | None = None,
+        parent_fk: str | None = None,
+        parent_user_column: str = "user_id",
     ) -> int:
         from psycopg import sql
 
@@ -1668,6 +1725,30 @@ class PostgresGateway:
                 raise ValueError(f"No user identity column found on {schema}.{table}")
             conditions.append(sql.SQL("{col} = %s").format(col=sql.Identifier(user_column)))
             params.append(user_id)
+
+        # Parent-table ownership: enforce that the FK points to a parent row
+        # owned by the authenticated user (e.g. ai.messages -> ai.conversations).
+        if owner_user_id is not None and parent_schema and parent_table and parent_fk:
+            if parent_fk not in columns:
+                raise ValueError(f"Parent FK column {parent_fk!r} does not exist on {schema}.{table}")
+            conditions.append(
+                sql.SQL(
+                    "exists(select 1 from {pschema}.{ptable}"
+                    " where {pschema}.{ptable}.{pid} = {schema}.{table}.{fk}"
+                    " and {pschema}.{ptable}.{ucol} = %s"
+                    " and {pschema}.{ptable}.{tcol} = %s)"
+                ).format(
+                    pschema=sql.Identifier(parent_schema),
+                    ptable=sql.Identifier(parent_table),
+                    pid=sql.Identifier("id"),
+                    schema=sql.Identifier(schema),
+                    table=sql.Identifier(table),
+                    fk=sql.Identifier(parent_fk),
+                    ucol=sql.Identifier(parent_user_column),
+                    tcol=sql.Identifier(tenant_column),
+                )
+            )
+            params.extend([owner_user_id, tenant_id])
 
         for key, value in (filters or {}).items():
             if value is None:
@@ -1702,6 +1783,11 @@ class PostgresGateway:
         hidden_columns: Sequence[str] = (),
         large_columns: Sequence[str] = (),
         include_large_fields: bool = True,
+        owner_user_id: str | UUID | None = None,
+        parent_schema: str | None = None,
+        parent_table: str | None = None,
+        parent_fk: str | None = None,
+        parent_user_column: str = "user_id",
     ) -> dict[str, Any] | None:
         rows = self.read_frontend_table(
             schema=schema,
@@ -1718,6 +1804,11 @@ class PostgresGateway:
             offset=0,
             order_by="id",
             order_dir="asc",
+            owner_user_id=owner_user_id,
+            parent_schema=parent_schema,
+            parent_table=parent_table,
+            parent_fk=parent_fk,
+            parent_user_column=parent_user_column,
         )
         return rows[0] if rows else None
 

@@ -1,10 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FileText, Trash2 } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../context/AuthContext';
 import UploadCSVButton from './UploadCSVButton';
 
 const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`);
+
+const STATUS_COLORS = {
+  completed: '#10B981',
+  ingesting: '#F59E0B',
+  profiled:  '#60A5FA',
+  failed:    '#F87171',
+  uploaded:  '#94A3B8',
+};
 
 export default function FilesTab() {
   const { tenantId } = useAuth();
@@ -13,13 +21,9 @@ export default function FilesTab() {
 
   const load = useCallback(() => {
     if (!tenantId) return;
-    api.files(tenantId).then((d) => setFiles(d?.items || [])).catch((e) => setError(e.message));
+    api.datasets(tenantId).then((d) => setFiles(d?.items || [])).catch((e) => setError(e.message));
   }, [tenantId]);
   useEffect(() => { load(); }, [load]);
-
-  const remove = async (id) => {
-    try { await api.deleteFile(id, tenantId); load(); } catch (err) { setError(err.message); }
-  };
 
   return (
     <div className="workspace-files">
@@ -48,16 +52,32 @@ export default function FilesTab() {
       {files.length > 0 && (
         <div className="workspace-files__table-wrap">
           <table className="workspace-files__table">
-            <thead><tr><th>File Name</th><th>Type</th><th>Size</th><th>Index</th><th>Uploaded</th><th>Action</th></tr></thead>
+            <thead>
+              <tr>
+                <th>File Name</th>
+                <th>Entity</th>
+                <th>Rows</th>
+                <th>Size</th>
+                <th>Status</th>
+                <th>Uploaded</th>
+              </tr>
+            </thead>
             <tbody>
               {files.map((f) => (
                 <tr key={f.id}>
-                  <td className="file-name-cell"><FileText size={16} className="file-icon" /><span>{f.metadata?.filename || f.title}</span></td>
-                  <td><span className="type-tag">{f.metadata?.mime_type || '—'}</span></td>
-                  <td><strong>{fmtSize(f.metadata?.size_bytes)}</strong></td>
-                  <td>{f.metadata?.index_status || '—'}</td>
+                  <td className="file-name-cell">
+                    <FileText size={16} className="file-icon" />
+                    <span>{f.filename}</span>
+                  </td>
+                  <td><span className="type-tag">{f.detected_entity || f.file_type || '—'}</span></td>
+                  <td><strong>{f.row_count != null ? f.row_count.toLocaleString() : '—'}</strong></td>
+                  <td>{fmtSize(f.byte_size)}</td>
+                  <td>
+                    <span style={{ color: STATUS_COLORS[f.status] || '#94A3B8', fontWeight: 600, textTransform: 'capitalize' }}>
+                      {f.status || '—'}
+                    </span>
+                  </td>
                   <td className="updated-cell">{new Date(f.created_at).toLocaleString()}</td>
-                  <td><button className="download-file-btn" onClick={() => remove(f.id)}><Trash2 size={14} /> Delete</button></td>
                 </tr>
               ))}
             </tbody>

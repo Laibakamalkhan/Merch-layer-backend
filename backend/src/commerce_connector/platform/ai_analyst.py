@@ -2157,16 +2157,20 @@ class AIAnalyst:
 
             retrieval_count = 15 if reasoning else 10
 
-            context = self.retriever.retrieve(
-                tenant_id,
-                question,
-                count=retrieval_count,
-            )
-
-            if not context:
-                raise RuntimeError(
-                    "RAG index is empty. Build/rebuild the semantic index first."
+            context: list[dict[str, Any]] = []
+            try:
+                context = self.retriever.retrieve(
+                    tenant_id,
+                    question,
+                    count=retrieval_count,
                 )
+            except Exception as rag_exc:
+                logger.warning(
+                    "Semantic RAG retrieval failed (%s: %s). Continuing with catalog snapshot.",
+                    type(rag_exc).__name__,
+                    rag_exc,
+                )
+                context = []
 
             snapshot = self.db.semantic_catalog_snapshot(tenant_id)
             resolution = resolve_metrics(question, snapshot)
@@ -2177,11 +2181,15 @@ class AIAnalyst:
                 )
 
             catalog_text = compact_semantic_context(snapshot, resolution)
-            semantic = "\n\n".join(
-                f"[{item['title']}] "
-                f"similarity={item['similarity']:.3f}\n"
-                f"{item['content']}"
-                for item in context
+            semantic = (
+                "\n\n".join(
+                    f"[{item['title']}] "
+                    f"similarity={item['similarity']:.3f}\n"
+                    f"{item['content']}"
+                    for item in context
+                )
+                if context
+                else ""
             )
 
             history_text = ""
@@ -2227,6 +2235,28 @@ class AIAnalyst:
                             for f in files
                         )
                     )
+
+            # Append uploaded dataset inventory so the AI can answer
+            # "which file did this data come from?" type questions.
+            try:
+                uploaded_datasets = self.db.list_uploaded_datasets(tenant_id, limit=50)
+                completed_datasets = [
+                    d for d in (uploaded_datasets or [])
+                    if d.get("status") == "completed"
+                ]
+                if completed_datasets:
+                    dataset_lines = "\n".join(
+                        f"- \"{d['filename']}\" | entity: {d.get('detected_entity') or 'unknown'}"
+                        f" | rows: {d.get('row_count') or 0}"
+                        f" | uploaded: {str(d.get('created_at', ''))[:10]}"
+                        for d in completed_datasets
+                    )
+                    files_text += (
+                        "\n\nUploaded CSV datasets (data sources for this workspace):\n"
+                        + dataset_lines
+                    )
+            except Exception:
+                pass
 
             tasks, capped, breakdown_notice = _build_subquery_tasks(
                 question,

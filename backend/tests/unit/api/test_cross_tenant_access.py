@@ -23,6 +23,15 @@ JOB_B = uuid.uuid4()
 CONV_A = uuid.uuid4()
 CONV_B = uuid.uuid4()
 
+# Same-tenant conversation/message fixtures for ai.messages authz tests
+SHARED_TENANT = uuid.uuid4()
+USER_X = str(uuid.uuid4())
+USER_Y = str(uuid.uuid4())
+CONV_X = uuid.uuid4()  # conversation owned by USER_X in SHARED_TENANT
+CONV_Y = uuid.uuid4()  # conversation owned by USER_Y in SHARED_TENANT
+MSG_X = uuid.uuid4()   # message in CONV_X (belongs to USER_X)
+MSG_Y = uuid.uuid4()   # message in CONV_Y (belongs to USER_Y)
+
 _SECRET_KEY_MARKERS = ("secret", "token", "password", "api_key")
 
 
@@ -63,6 +72,116 @@ class FakeDB:
             str(TENANT_A): {"id": str(TENANT_A), "metadata": {"plan_code": "free"}},
             str(TENANT_B): {"id": str(TENANT_B), "metadata": {"plan_code": "free"}},
         }
+        # ai.conversations rows for same-tenant ownership tests
+        self._ai_conversations = [
+            {"id": str(CONV_X), "tenant_id": str(SHARED_TENANT), "user_id": USER_X, "title": "X conv", "created_at": "2026-10-01"},
+            {"id": str(CONV_Y), "tenant_id": str(SHARED_TENANT), "user_id": USER_Y, "title": "Y conv", "created_at": "2026-10-01"},
+        ]
+        # ai.messages rows — no user_id column; ownership derived via conversation_id
+        self._ai_messages = [
+            {
+                "id": str(MSG_X), "conversation_id": str(CONV_X),
+                "tenant_id": str(SHARED_TENANT), "role": "user",
+                "content": "secret-x", "metadata": {"key": "val-x"},
+                "file_ids": ["file-x"], "created_at": "2026-10-01",
+            },
+            {
+                "id": str(MSG_Y), "conversation_id": str(CONV_Y),
+                "tenant_id": str(SHARED_TENANT), "role": "user",
+                "content": "secret-y", "metadata": {"key": "val-y"},
+                "file_ids": ["file-y"], "created_at": "2026-10-01",
+            },
+        ]
+        # Column definitions used by the generic database endpoints
+        self._table_columns = {
+            ("ai", "messages"): [
+                "id", "conversation_id", "tenant_id", "role",
+                "content", "metadata", "file_ids", "created_at",
+            ],
+            ("ai", "conversations"): [
+                "id", "tenant_id", "user_id", "title", "created_at",
+            ],
+        }
+
+    # -- generic database endpoint helpers -----------------------------------
+    def table_columns(self, schema, table):
+        return list(self._table_columns.get((schema, table), []))
+
+    def _filter_rows(self, rows, *, scope, tenant_column, tenant_id, user_id,
+                     filters, owner_user_id=None, parent_schema=None,
+                     parent_table=None, parent_fk=None,
+                     parent_user_column="user_id", **_kw):
+        """In-memory simulation of the SQL WHERE logic in the real gateway."""
+        result = list(rows)
+        if scope in {"tenant", "tenant_or_global"} and tenant_id is not None:
+            result = [r for r in result if r.get(tenant_column) == str(tenant_id)]
+        if scope == "user" and user_id is not None:
+            uid_col = "user_id" if any("user_id" in r for r in result) else "id"
+            result = [r for r in result if r.get(uid_col) == str(user_id)]
+        # Parent-table ownership: simulate the EXISTS subquery
+        if owner_user_id and parent_schema and parent_table and parent_fk:
+            parent_rows = self._table_data(parent_schema, parent_table)
+            owned_parent_ids = {
+                r["id"] for r in parent_rows
+                if r.get(parent_user_column) == str(owner_user_id)
+                and r.get(tenant_column) == str(tenant_id)
+            }
+            result = [r for r in result if r.get(parent_fk) in owned_parent_ids]
+        for key, value in (filters or {}).items():
+            result = [r for r in result if r.get(key) == str(value)]
+        return result
+
+    def _table_data(self, schema, table):
+        key = f"{schema}.{table}"
+        if key == "ai.messages":
+            return self._ai_messages
+        if key == "ai.conversations":
+            return self._ai_conversations
+        return []
+
+    def read_frontend_table(self, *, schema, table, scope, tenant_column="tenant_id",
+                            tenant_id=None, user_id=None, filters=None,
+                            hidden_columns=(), large_columns=(),
+                            include_large_fields=False, limit=100, offset=0,
+                            order_by=None, order_dir="desc", **kwargs):
+        rows = self._table_data(schema, table)
+        filtered = self._filter_rows(
+            rows, scope=scope, tenant_column=tenant_column,
+            tenant_id=tenant_id, user_id=user_id, filters=filters, **kwargs,
+        )
+        hidden_set = set(hidden_columns)
+        large_set = set(large_columns)
+        result = []
+        for r in filtered[offset:offset + limit]:
+            row = {
+                k: v for k, v in r.items()
+                if k not in hidden_set and (include_large_fields or k not in large_set)
+            }
+            result.append(row)
+        return result
+
+    def count_frontend_table(self, *, schema, table, scope, tenant_column="tenant_id",
+                             tenant_id=None, user_id=None, filters=None,
+                             hidden_columns=(), **kwargs):
+        rows = self._table_data(schema, table)
+        return len(self._filter_rows(
+            rows, scope=scope, tenant_column=tenant_column,
+            tenant_id=tenant_id, user_id=user_id, filters=filters, **kwargs,
+        ))
+
+    def get_frontend_record(self, *, schema, table, record_id, scope,
+                            tenant_column="tenant_id", tenant_id=None,
+                            user_id=None, hidden_columns=(), large_columns=(),
+                            include_large_fields=True, **kwargs):
+        rows = self.read_frontend_table(
+            schema=schema, table=table, scope=scope,
+            tenant_column=tenant_column, tenant_id=tenant_id,
+            user_id=user_id, filters={"id": record_id},
+            hidden_columns=hidden_columns, large_columns=large_columns,
+            include_large_fields=include_large_fields, limit=1, offset=0,
+            **kwargs,
+        )
+        return rows[0] if rows else None
 
     def is_tenant_member(self, tenant_id, user_id) -> bool:
         tenant = str(tenant_id)
@@ -70,6 +189,8 @@ class FakeDB:
             return tenant == str(TENANT_A)
         if user_id == USER_B:
             return tenant == str(TENANT_B)
+        if user_id in {USER_X, USER_Y}:
+            return tenant == str(SHARED_TENANT)
         return False
 
     def get_connection(self, connection_id):
@@ -239,3 +360,160 @@ def _walk_keys(obj):
     elif isinstance(obj, list):
         for item in obj:
             yield from _walk_keys(item)
+
+
+
+# ---------------------------------------------------------------------------
+# Same-tenant ai.messages authorization tests
+# ---------------------------------------------------------------------------
+# USER_X and USER_Y are both members of SHARED_TENANT.  USER_X must not see
+# USER_Y's messages (and vice-versa) even though they share a tenant.
+
+
+def _shared_client(user_id: str) -> TestClient:
+    """Client wired to FakeDB/FakeService with both users in SHARED_TENANT."""
+    service = FakeService()
+    app = create_app()
+    app.dependency_overrides[deps.get_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id=user_id, email=f"{user_id}@example.com", raw={}
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+class TestSameTenantMessageIsolation:
+    """Verify that ai.messages ownership is enforced via parent conversation."""
+
+    # -- LIST ----------------------------------------------------------------
+    def test_list_returns_only_own_messages(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            "/api/v1/database/ai/messages",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        ids = {item["id"] for item in items}
+        assert str(MSG_X) in ids
+        assert str(MSG_Y) not in ids
+
+    def test_list_with_large_fields_does_not_leak_other_user(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            "/api/v1/database/ai/messages",
+            params={"tenant_id": str(SHARED_TENANT), "include_large_fields": "true"},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        ids = {item["id"] for item in items}
+        assert str(MSG_X) in ids
+        assert str(MSG_Y) not in ids
+        # Verify own content is present but other user's content is not
+        all_text = str(items)
+        assert "secret-x" in all_text
+        assert "secret-y" not in all_text
+        assert "val-y" not in all_text
+        assert "file-y" not in all_text
+
+    # -- COUNT ---------------------------------------------------------------
+    def test_count_excludes_other_user_messages(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            "/api/v1/database/ai/messages/_count",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1  # only MSG_X
+
+    # -- DETAIL --------------------------------------------------------------
+    def test_detail_own_message_returns_200(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            f"/api/v1/database/ai/messages/{MSG_X}",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["id"] == str(MSG_X)
+
+    def test_detail_other_user_message_returns_404(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            f"/api/v1/database/ai/messages/{MSG_Y}",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 404
+
+    def test_detail_does_not_disclose_other_user_content(self):
+        client = _shared_client(USER_X)
+        resp = client.get(
+            f"/api/v1/database/ai/messages/{MSG_Y}",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        text = resp.text
+        assert "secret-y" not in text
+        assert "val-y" not in text
+        assert "file-y" not in text
+
+    # -- QUERY (POST) --------------------------------------------------------
+    def test_query_cannot_retrieve_other_user_messages_by_conversation(self):
+        client = _shared_client(USER_X)
+        resp = client.post(
+            "/api/v1/database/query/ai/messages",
+            json={
+                "tenant_id": str(SHARED_TENANT),
+                "filters": {"conversation_id": str(CONV_Y)},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+
+    def test_query_returns_own_messages(self):
+        client = _shared_client(USER_X)
+        resp = client.post(
+            "/api/v1/database/query/ai/messages",
+            json={
+                "tenant_id": str(SHARED_TENANT),
+                "filters": {"conversation_id": str(CONV_X)},
+            },
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        assert len(items) == 1
+        assert items[0]["id"] == str(MSG_X)
+
+    def test_query_ignores_client_supplied_user_id(self):
+        """Supplying user_id in the query body must not bypass ownership."""
+        client = _shared_client(USER_X)
+        resp = client.post(
+            "/api/v1/database/query/ai/messages",
+            json={
+                "tenant_id": str(SHARED_TENANT),
+                "user_id": USER_Y,
+                "filters": {"conversation_id": str(CONV_Y)},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+
+    # -- Cross-tenant still blocked ------------------------------------------
+    def test_cross_tenant_messages_still_blocked(self):
+        """USER_A (TENANT_A member) cannot access SHARED_TENANT messages."""
+        client = _shared_client(USER_A)
+        resp = client.get(
+            "/api/v1/database/ai/messages",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 403
+
+    # -- Symmetric check for USER_Y -----------------------------------------
+    def test_user_y_cannot_see_user_x_messages(self):
+        client = _shared_client(USER_Y)
+        resp = client.get(
+            "/api/v1/database/ai/messages",
+            params={"tenant_id": str(SHARED_TENANT)},
+        )
+        assert resp.status_code == 200
+        items = resp.json()["items"]
+        ids = {item["id"] for item in items}
+        assert str(MSG_Y) in ids
+        assert str(MSG_X) not in ids

@@ -16,6 +16,12 @@ class TableSpec:
     hidden_columns: tuple[str, ...] = ()
     large_columns: tuple[str, ...] = ()
     write_mode: str = "pipeline"
+    # Parent-table ownership: when set, all reads add an EXISTS subquery
+    # joining through the parent row to enforce user_id ownership.
+    parent_schema: str | None = None
+    parent_table: str | None = None
+    parent_fk: str | None = None
+    parent_user_column: str = "user_id"
 
     @property
     def key(self) -> str:
@@ -104,7 +110,8 @@ TABLE_SPECS: tuple[TableSpec, ...] = (
         write_mode="rag",
     ),
     TableSpec("ai", "conversations", scope="user", write_mode="chat"),
-    TableSpec("ai", "messages", large_columns=("content", "metadata"), write_mode="chat"),
+    TableSpec("ai", "messages", large_columns=("content", "metadata"), write_mode="chat",
+              parent_schema="ai", parent_table="conversations", parent_fk="conversation_id"),
     TableSpec("ai", "query_runs", scope="user", large_columns=("user_prompt", "intent", "selected_context")),
     TableSpec(
         "ai",
